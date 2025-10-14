@@ -10,10 +10,12 @@ from nav_msgs.msg import Odometry
 import time
 import numpy as np
 import transforms3d
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
 
 
-MAX_VELOCITY_LINEAR = 0.3
-MAX_VELOCITY_ANGULAR = 0.3
+MAX_VELOCITY_LINEAR = 0.2
+MAX_VELOCITY_ANGULAR = 0.5
 class VelocityPublisher(Node):
     def __init__(self):
         super().__init__('velocity_publisher')
@@ -22,10 +24,13 @@ class VelocityPublisher(Node):
         self.create_subscription (MotionState, '/motion_state',self.motion_state_callback,10)
         self.create_subscription (SystemState, '/system_state',self.system_state_callback,10)
         self.create_subscription (Odometry, '/odom', self.odom_callback,10)
-        self.create_subscription (TFMessage, '/tf', self.map_callback,10)
+        # self.create_subscription (TFMessage, '/tf', self.map_callback,10)
         
         self.odom_received = False
         self.use_map = True
+        
+        # if self.use_map:
+        #     self.odom_received = True
         
         self.x = 0.0
         self.y = 0.0
@@ -34,6 +39,7 @@ class VelocityPublisher(Node):
         self.kp_linear = 1
         self.kp_angular = 5
         
+        
         self.ki_linear = 0.0
         self.ki_angular = 0.0
         
@@ -41,19 +47,24 @@ class VelocityPublisher(Node):
         self.kd_angular = 0.1
         
     
-        
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
+        self.target_frame = "base_link"
+        self.source_frame = "map"
         
         self.publisher_ = self.create_publisher(Twist, '/cmd_vel', 10)
         # # self.publish_velocity_timer(1.0)
         # self.publish_velocity()
         
+        self.angle_reached = False 
+        
         
         # self.navigate_to_goal(0,0,0) 
         while not self.odom_received:
             print ("waiting for odom")
+            self.get_map()
             rclpy.spin_once(self, timeout_sec=0.02)
-        self.navigate_to_goal(0,0,np.deg2rad(np.pi)) 
-        self.start_time = time.time()
+        self.navigate_to_goal(0.0,0,np.deg2rad(-90)) 
         # self.timer = self.create_timer(.02, self.publish_velocity_timer)
     
     def publish_velocity_timer (self,dur = 8):
@@ -77,7 +88,8 @@ class VelocityPublisher(Node):
         msg.linear.y = y
         msg.angular.z = z
         # print (self.x, self.y, self.theta)
-        # print (msg)
+        
+        print (msg)
         self.publisher_.publish(msg)
 
     def actuator_state_callback(self, msg):
@@ -110,7 +122,8 @@ class VelocityPublisher(Node):
     
         
         prev_err_x, prev_err_y, prev_err_theta, error_sum_x, error_sum_y, error_sum_theta = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-        while (abs(self.x - x) > 0.005 or abs(self.y - y) > 0.005 or abs(np.rad2deg(self.theta - theta)) > .1):
+        
+        while (abs(self.x - x) > 0.005 or abs(self.y - y) > 0.005 or abs(np.rad2deg(self.theta - theta)) > .2):
             # Calculate velocity commands using PID controller
             velocity_x, velocity_y, velocity_theta, prev_err_x, prev_err_y, prev_err_theta, error_sum_x, error_sum_y, error_sum_theta =     \
             self.PID_controller(x, y, theta, prev_err_x, prev_err_y, prev_err_theta, error_sum_x, error_sum_y, error_sum_theta, 0.02)
@@ -120,33 +133,48 @@ class VelocityPublisher(Node):
                 
             if abs(self.y - y) < 0.005:
                 velocity_y = 0.0
-            if abs(np.rad2deg(self.theta - theta)) <.1:
-                velocity_theta = 0.0
                 
-            if abs(np.rad2deg(self.theta - theta)) >.1:
+            if (abs(np.rad2deg(self.theta - theta)) <.2 or self.angle_reached  == True):
+                velocity_theta = 0.0
+                self.angle_reached = True
+            
+            
+            if self.angle_reached == False:
                 velocity_x = 0.0
                 velocity_y = 0.0
-                # print ("rotating in place, angle diff is ", abs(np.rad2deg(self.theta - theta)))
+                # print ("rotating in place angle diff is ", (np.rad2deg(self.theta - theta)))
+        
                 
-                
-            
             self.publish_velocity(velocity_x, velocity_y, velocity_theta)
-            rclpy.spin_once(self, timeout_sec=0.02) 
+            rclpy.spin_once(self, timeout_sec=0.02)
+            self.get_map() 
+            print ("self theta is ", np.rad2deg(self.theta))
         print ("goal reached")
     
-    def map_callback (self,msg):
+    def get_map (self):
         if self.use_map:
-            self.x = msg.transforms[0].transform.translation.x
-            self.y = msg.transforms[0].transform.translation.y  
-            quat_x = msg.transforms[0].transform.rotation.x
-            quat_y = msg.transforms[0].transform.rotation.y
-            quat_z = msg.transforms[0].transform.rotation.z
-            quat_w = msg.transforms[0].transform.rotation.w
-             # Convert quaternion to Euler angles
-            euler = transforms3d.euler.quat2euler([quat_w, quat_x, quat_y, quat_z])
-            self.theta = euler[2]
-            print ("my theta is ", np.rad2deg(self.theta))
-            self.odom_received = True
+            if self._tf_buffer.can_transform(self.target_frame, self.source_frame, rclpy.time.Time()):
+                msg = self._tf_buffer.lookup_transform(
+                    self.target_frame,
+                    self.source_frame,
+                    rclpy.time.Time()
+                )
+                                
+                self.x = -msg.transform.translation.x
+                self.y = -msg.transform.translation.y  
+                quat_x = msg.transform.rotation.x
+                quat_y = msg.transform.rotation.y
+                quat_z = msg.transform.rotation.z
+                quat_w = msg.transform.rotation.w
+                # Convert quaternion to Euler angles
+                euler = transforms3d.euler.quat2euler([quat_w, quat_x, quat_y, quat_z])
+                self.theta = -euler[2]
+                # print (self.x, self.y, np.rad2deg(self.theta))
+                # print ("my theta is ", np.rad2deg(self.theta))
+                self.odom_received = True
+            else:
+                self.get_logger().warn(f"No transform yet from {self.source_frame} to {self.target_frame}")
+           
         
         
                           

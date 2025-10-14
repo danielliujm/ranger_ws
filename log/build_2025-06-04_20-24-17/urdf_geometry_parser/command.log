@@ -1,1 +1,0 @@
-Invoking command in '/home/dliujm/ranger_ws/src/build/urdf_geometry_parser': /usr/bin/cmake /home/dliujm/ranger_ws/src/ugv_gazebo_sim/ranger_mini/urdf_geometry_parser -DCATKIN_INSTALL_INTO_PREFIX_ROOT=0 -DCMAKE_INSTALL_PREFIX=/home/dliujm/ranger_ws/src/install/urdf_geometry_parser

@@ -1,2 +1,0 @@
-Invoking command in '/home/dliujm/ranger_ws/src/build/bunker_description': /usr/bin/cmake /home/dliujm/ranger_ws/src/ugv_gazebo_sim/bunker/bunker_description -DCATKIN_INSTALL_INTO_PREFIX_ROOT=0 -DCMAKE_INSTALL_PREFIX=/home/dliujm/ranger_ws/src/install/bunker_description
-Invoked command in '/home/dliujm/ranger_ws/src/build/bunker_description' returned '1': /usr/bin/cmake /home/dliujm/ranger_ws/src/ugv_gazebo_sim/bunker/bunker_description -DCATKIN_INSTALL_INTO_PREFIX_ROOT=0 -DCMAKE_INSTALL_PREFIX=/home/dliujm/ranger_ws/src/install/bunker_description

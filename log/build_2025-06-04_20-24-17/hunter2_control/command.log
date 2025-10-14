@@ -1,2 +1,0 @@
-Invoking command in '/home/dliujm/ranger_ws/src/build/hunter2_control': /usr/bin/cmake /home/dliujm/ranger_ws/src/ugv_gazebo_sim/hunter/hunter2_control -DCATKIN_INSTALL_INTO_PREFIX_ROOT=0 -DCMAKE_INSTALL_PREFIX=/home/dliujm/ranger_ws/src/install/hunter2_control
-Invoked command in '/home/dliujm/ranger_ws/src/build/hunter2_control' returned '1': /usr/bin/cmake /home/dliujm/ranger_ws/src/ugv_gazebo_sim/hunter/hunter2_control -DCATKIN_INSTALL_INTO_PREFIX_ROOT=0 -DCMAKE_INSTALL_PREFIX=/home/dliujm/ranger_ws/src/install/hunter2_control

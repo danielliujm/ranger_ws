@@ -1,8 +1,0 @@
-/home/dliujm/ranger_ws/src/build/ranger_msgs/rosidl_adapter/ranger_msgs:msg/ActuatorState.idl
-/home/dliujm/ranger_ws/src/build/ranger_msgs/rosidl_adapter/ranger_msgs:msg/ActuatorStateArray.idl
-/home/dliujm/ranger_ws/src/build/ranger_msgs/rosidl_adapter/ranger_msgs:msg/DriverState.idl
-/home/dliujm/ranger_ws/src/build/ranger_msgs/rosidl_adapter/ranger_msgs:msg/MotionState.idl
-/home/dliujm/ranger_ws/src/build/ranger_msgs/rosidl_adapter/ranger_msgs:msg/MotorState.idl
-/home/dliujm/ranger_ws/src/build/ranger_msgs/rosidl_adapter/ranger_msgs:msg/SystemState.idl
-/home/dliujm/ranger_ws/src/build/ranger_msgs/rosidl_adapter/ranger_msgs:msg/RCState.idl
-/home/dliujm/ranger_ws/src/build/ranger_msgs/rosidl_adapter/ranger_msgs:srv/TriggerParkMode.idl
