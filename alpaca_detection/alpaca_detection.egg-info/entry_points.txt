@@ -1,0 +1,3 @@
+[console_scripts]
+SimpleTrack_node = alpaca_detection.SimpleTrack_node:main
+

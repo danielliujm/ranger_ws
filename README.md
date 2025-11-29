@@ -148,7 +148,7 @@ TODO: add permanent fix in launch file
 
 ### Run online_async SLAM using SLAM toolbox and nav2
 ```
- ros2 launch slam_toolbox online_async_launch.py slam_params_file:=/home/dliujm/ranger_ws/src/ranger_ctrl/config/mapper_params_online_async.yaml
+ ros2 launch slam_toolbox online_async_launch.py slam_params_file:=/home/dliujm/ranger_ws/src/nav2_params/mapper_params_online_async.yaml
  ```
 save the map with 
 ```
@@ -175,6 +175,8 @@ ros2 launch nav2_bringup bringup_launch.py use_sim_time:=False map:=/path/to/map
 ```
 use rviz of foxglove to pushlish a 2d pose to the topic `/goal_pose` and the node will publish twist commands to `/cmd_vel`
 
+
+Debug: If localization not working, check if odom is being published correctly. Replug the robot CAN port. 
 
 ### run rtabmap SLAM
 
@@ -205,9 +207,11 @@ ros2 launch rtabmap_launch rtabmap.launch.py   rtabmapviz:=false rtabmap_viz:=fa
 
   To launch rtabmap 3D using lidar, use 
   ```
-  ros2 launch ranger_ctrl rtabmap_lidar.launch.py lidar_topc:=/velodyne_points database_path:=/path/to/database frame_id:=base_link rtabmapviz:=false rtabmap_viz:=false rviz:=false use_rviz:=false
+  ros2 launch alpaca_slam rtabmap_lidar.launch.py lidar_topc:=/velodyne_points database_path:=~/maps/rtabmap_lidar_10_22_2.db frame_id:=base_link rtabmapviz:=false rtabmap_viz:=false rviz:=false use_rviz:=false localization:=false
   ```
   needed to make our own copy of the launch because the rtabmap example doesn't support custom file path and deletes the map on start up every time.
+
+  To run rtabmap localization using lidar, run the same command with `localization:=true`. no need to specify initial pose
 
   Localization 
   ```
@@ -231,5 +235,18 @@ ros2 launch rtabmap_launch rtabmap.launch.py   rtabmapviz:=false rtabmap_viz:=fa
 kiss_slam_pipeline /path/to/rosbag/folder --topic /pointcloud_topic --config /path/to/config.yaml
 ```
 
+## 3D lidar human detection 
+trying the repo : https://github.com/klintan/ros2_pcl_object_detection.git , a ROS2 package transferred over from a ROS1 package that had more than 800 stars. Doesn't work very well right now, publishing the ground as part of the clusters. 
 
+# Autoware
+Run with build_only once to build TRT engine. Once have engine, run with build_only:=false.
+ ```
+ ros2 launch autoware_lidar_centerpoint lidar_centerpoint.launch.xml model_name:=centerpoint model_path:=/home/dliujm/pretrained_centerpoint_model model_param_path:=/home/dliujm/ranger_ws/src/autoware_universe/perception/autoware_lidar_centerpoint/config/centerpoint.param.yaml build_only:=true 
+ ```
+
+## AprilTag Detection 
+
+```
+ros2 run apriltag_ros apriltag_node --ros-args -r image_rect:=/zed/zed_node/rgb/image_rect_color -r camera_info:=/zed/zed_node/rgb_raw/camera_info --params-file `ros2 pkg prefix apriltag_ros`/share/apriltag_ros/cfg/tags_36h11.yaml
+```
 
