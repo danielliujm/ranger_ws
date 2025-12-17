@@ -17,7 +17,7 @@ class PlanSegmenter(Node):
         super().__init__('plan_segmenter')
 
         # Parameters
-        self.declare_parameter('segment_length', 15.0)  # meters
+        self.declare_parameter('segment_length', 30.0)  # meters
 
         self.segment_length = (
             self.get_parameter('segment_length').get_parameter_value().double_value

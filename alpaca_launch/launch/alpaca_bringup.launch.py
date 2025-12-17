@@ -94,6 +94,10 @@ def generate_launch_description():
         condition = IfCondition(use_lidar),
     )
 
+    # dummy_tf_publisher = ExecuteProcess (
+    #     cmd = ['ros2', 'run', 'tf2_ros', 'static_transform_publisher', '0', '0', '0', '0', '0', '0', 'map', 'odom'],
+    # )
+
     pointcloud_filter_node = Node(
         package="alpaca_launch",
         executable="pointcloud_filter",
@@ -139,6 +143,7 @@ def generate_launch_description():
     ld.add_action (cloud_relay_node)
     ld.add_action (pointcloud_filter_node)
     ld.add_action (lidar_pointcloud_bringup_launch)
+    # ld.add_action (dummy_tf_publisher)
     # ld.add_action (point_2_laserscan)   
     
 

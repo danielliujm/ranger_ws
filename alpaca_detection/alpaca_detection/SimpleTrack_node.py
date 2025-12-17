@@ -3,6 +3,7 @@ from rclpy.node import Node
 import rclpy
 import ros2_numpy as rnp
 import numpy as np
+from collections import deque
 from alpaca_detection.SimpleTrack.mot_3d.mot import MOTModel
 from alpaca_detection.SimpleTrack.mot_3d.frame_data import FrameData
 from alpaca_detection.SimpleTrack.mot_3d.data_protos import BBox
@@ -11,7 +12,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 import math
 
 class SimpleTrackNode(Node):
-    def __init__ (self, configs=None):
+    def __init__ (self, configs=None, tracker_hz: float = 20.0):
         super().__init__('SimpleTrack_node')
         self.pc_numpy = None
         # provide sensible default configs when none provided
@@ -19,12 +20,12 @@ class SimpleTrackNode(Node):
             configs = {
                 'running': {
                     'match_type': 'bipartite',
-                    'score_threshold': 0.8,
+                    'score_threshold': 0.9,
                     'asso': 'giou',
-                    'asso_thres': {'giou': 1.5, 'iou': 0.9},
+                    'asso_thres': {'giou': 1.5, 'iou': 0.9, 'm_dis':2.0, 'euler':12},
                     'motion_model': 'kf',
-                    'max_age_since_update': 2,
-                    'min_hits_to_birth': 20,
+                    'max_age_since_update': 2,  
+                    'min_hits_to_birth': 2,
                     'covariance': {},
                     # 'asso_thres':{
                     #     'iou': 0.9,                  
@@ -33,8 +34,8 @@ class SimpleTrackNode(Node):
                 },
                 'redundancy': {
                     'mode': 'mm',
-                    'det_score_threshold': {'giou': 0.1, 'iou': 0.1, 'euler': 0.1},
-                    'det_dist_threshold': {'giou': -0.5, 'iou': 0.1, 'euler': 4}
+                    'det_score_threshold': {'giou': 0.1, 'iou': 0.1, 'euler': 0.1, 'm_dis': 0.4},
+                    'det_dist_threshold': {'giou': -0.5, 'iou': 0.1, 'euler': 4, 'm_dis': 12},
                 }
             }
         self.mot_model = MOTModel(configs)
@@ -44,7 +45,16 @@ class SimpleTrackNode(Node):
 
         # keep track of marker ids we've published so we can delete ones that disappear
         self._published_tracker_ids = set()
-        self.tracker = MOTModel (configs)
+        # queue incoming detection frames so the tracker step can run at a fixed rate
+        self._frame_queue = deque()
+        self._last_frame_stamp = None
+        self._tracker_engaged = True
+        self.declare_parameter('tracker_update_rate', tracker_hz)
+        rate_param = float(self.get_parameter('tracker_update_rate').value)
+        if rate_param <= 0.0:
+            rate_param = 10.0
+        self._tracker_period = 1.0 / rate_param
+        # self._tracker_timer = self.create_timer(self._tracker_period, self._tracker_step)
     
     def detection_cb (self,msg):
         dets = []
@@ -62,13 +72,45 @@ class SimpleTrackNode(Node):
             det_types.append ('person')
 
         aux_info = {'is_key_frame': True}
-        frame_data = FrameData (dets = dets, ego = np.eye(4), time_stamp=det_time_stamp, aux_info=aux_info, det_types=det_types)
-        tracks = self.mot_model.frame_mot (frame_data)
-        # print ("Tracks: ", tracks[0][0])
-        # self.get_logger().info (f'Tracks: {tracks[0][2]}')
-        self.draw_tracks (tracks)
-        self.publish_results (tracks)
+        self._frame_queue.append({
+            'dets': dets,
+            'det_types': det_types,
+            'time_stamp': det_time_stamp,
+            'aux_info': aux_info
+        })
+        # self._tracker_engaged = True
+        self._tracker_step()
 
+    def _tracker_step(self):
+        """Run the tracker at a fixed cadence so it can predict between detections."""
+        if not self._tracker_engaged:
+            return
+
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if self._frame_queue and (self._last_frame_stamp is None or self._frame_queue[0]['time_stamp'] <= now):
+            frame = self._frame_queue.popleft()
+        else:
+            # no fresh detections yet, propagate state forward with an empty measurement
+            det_time_stamp = now if self._last_frame_stamp is None else max(now, self._last_frame_stamp + self._tracker_period)
+            frame = {
+                'dets': [],
+                'det_types': [],
+                'time_stamp': det_time_stamp,
+                'aux_info': {'is_key_frame': False}
+            }
+
+        frame_data = FrameData(
+            dets=frame['dets'],
+            ego=np.eye(4),
+            time_stamp=frame['time_stamp'],
+            aux_info=frame['aux_info'],
+            det_types=frame['det_types']
+        )
+        tracks = self.mot_model.frame_mot(frame_data)
+        self._last_frame_stamp = frame['time_stamp']
+        self.draw_tracks(tracks)
+        self.publish_results(tracks)
+    
     
     def draw_tracks(self, tracks):
         tracker_markers = MarkerArray()
@@ -101,6 +143,24 @@ class SimpleTrackNode(Node):
             marker.pose.orientation.w = qw
             tracker_markers.markers.append(marker)
 
+            # Text label sits slightly above the bbox to display the tracker ID
+            text_marker = Marker()
+            text_marker.header.frame_id = "velodyne"
+            text_marker.ns = "tracker_labels"
+            text_marker.id = tid
+            text_marker.type = Marker.TEXT_VIEW_FACING
+            text_marker.action = Marker.ADD
+            text_marker.scale.z = 0.75
+            text_marker.color.a = 1.0
+            text_marker.color.r = 1.0
+            text_marker.color.g = 1.0
+            text_marker.color.b = 1.0
+            text_marker.pose.position.x = track[0].x
+            text_marker.pose.position.y = track[0].y
+            text_marker.pose.position.z = track[0].z + track[0].h * 0.5 + 0.2
+            text_marker.text = str(tid)
+            tracker_markers.markers.append(text_marker)
+
         # Any previously published markers that are NOT in current_ids should be removed immediately
         removed_ids = self._published_tracker_ids - current_ids
         for rid in removed_ids:
@@ -110,6 +170,13 @@ class SimpleTrackNode(Node):
             del_marker.id = rid
             del_marker.action = Marker.DELETE
             tracker_markers.markers.append(del_marker)
+
+            del_text_marker = Marker()
+            del_text_marker.header.frame_id = "velodyne"
+            del_text_marker.ns = "tracker_labels"
+            del_text_marker.id = rid
+            del_text_marker.action = Marker.DELETE
+            tracker_markers.markers.append(del_text_marker)
 
         # publish and update the published ids set
         self.tracker_marker_publisher.publish(tracker_markers)
@@ -121,7 +188,7 @@ class SimpleTrackNode(Node):
         detection_msg.header.stamp = self.get_clock().now().to_msg()
         for track in tracks:
             bbox = track[0]
-            tid = track[1]
+            tid = track[1]  
             score = bbox.s if bbox.s is not None else 0.0
 
             det_msg = Detection3D()

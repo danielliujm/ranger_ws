@@ -1,19 +1,124 @@
+
+
+
 #!/usr/bin/env python3
-import os
-import sys
+"""
+GuideBot interaction pipeline
+
+Key TO KNOW for my dumbass:
+- Using `awaiting_command` flag
+- Core stuff:
+    * STT muting while TTS is speaking (prevents the stupid pc from hearing itself).
+    * Whisper stt.
+    * LLM JSON parsing.
+- Other:
+    * Wake word → prompt → next utterance → LLM → prints room + coords.
+"""
+
+import queue
+import threading
 import time
-import json
 import re
-import pyttsx3
-import speech_recognition as sr
+import json
+import sys
+import os
+import numpy as np
+import sounddevice as sd
+from faster_whisper import WhisperModel
+from piper import PiperVoice
 import google.generativeai as genai
+import wave
 from geometry_msgs.msg import Pose2D, PoseStamped
 from rclpy.node import Node
 import rclpy
 
-import ctypes
+# -----------------------------
+# CONFIGURATION
+# -----------------------------
+GENAI_API_KEY = "AIzaSyAir8vI-cqdr2Wp_IK1fZErz7OjhvrYybQ" # -- hit limit
+# GENAI_API_KEY = "AIzaSyB4akC2LeTmRn7551CoVEQNXaegcKx9ypw"
+genai.configure(api_key=GENAI_API_KEY)
+
+WHISPER_MODEL = "small"
+PIPER_VOICE_FILE = "en_US-lessac-medium.onnx"
+
+SAMPLE_RATE = 16000
+CHUNK_DURATION = 6   # seconds per audio chunk
+CHUNK_SIZE = SAMPLE_RATE * CHUNK_DURATION
+RMS_THRESHOLD = 0.003
+
+#  wake phrases
+WAKE_PHRASES = [
+    "hey alpaca",
+    "alpaca",
+    "hello alpaca",
+    "can you help me",
+    "help",
+]
+
+COMMAND_TIMEOUT = 15 # do i need this? bruh?
+
+# ROOM_COORDS = {
+#     3140: [0.0, 17.706],
+#     3141: [0.0, 17.706],
+#     3150: [0.0, 8.743],
+#     3160: [3.2, 7.1],
+#     3161: [4.567, -4.880],
+#     3170: [0.0, -9.543],
+#     3171: [0.0, -9.543],
+# }
+
+ROOM_COORDS = {
+    3120: [32.934119474181244, 0.10128666032650913],
+    "mens room": [22.92248035180356, -1.8145234970546478],
+    "womens room": [14.581120865409886, -2.9009808579800964],
+    "main elevator": [5.875413069500369, -1.512174393211807],
+    "3225": [36.12771020162656, -3.042278211135972],
+    "3224": [36.12771020162656, -3.042278211135972],
+    "3229": [37.243819686294565, -7.4572305996676995],
+    "kitchen":[37.243819686294565, -7.4572305996676995],
+    3248: [39.888493779116274, -21.058901691427295],
+}
 
 
+
+def get_coords(room_number):
+    return ROOM_COORDS.get(room_number, None)
+
+
+EXTRACTION_PROMPT = """
+You are a navigation interpreter. ONLY output JSON.
+
+Given the list of rooms ROOM_COORDS = {{
+        3120,
+        "mens room",
+        "womens room",
+        "main elevator",
+        "3225",
+        "3224",
+        "3229",
+        "kitchen",
+        3248
+}}
+
+Task:
+- Identify the target room.
+- Convert room name or number to string
+- Ignore irrelevant text.
+
+Output EXACTLY this format:
+{{
+    "target_room": <room name or number>
+}}
+
+User said: "{utterance}"
+"""
+
+
+
+# ----------------------------
+# ROS2 NODE 
+# ----------------------------
 class AlpacaInteractionNode(Node):
     def __init__(self):
         super().__init__('alpaca_interaction_node')
@@ -28,296 +133,337 @@ class AlpacaInteractionNode(Node):
         msg.pose.position.y = y
         self.coord_pub.publish(msg)
 
-
-try:
-    # Redirect ALSA errors to /dev/null
-    def py_alsa_silent(*args):
-        pass
-
-    # Set error handler
-    ERROR_HANDLER_FUNC = ctypes.CFUNCTYPE(None, ctypes.c_char_p, ctypes.c_int,
-                                          ctypes.c_char_p, ctypes.c_int,
-                                          ctypes.c_char_p)
-
-    c_error_handler = ERROR_HANDLER_FUNC(py_alsa_silent)
-    asound = ctypes.cdll.LoadLibrary("libasound.so")
-    asound.snd_lib_error_set_handler(c_error_handler)
-except Exception as e:
-    print("Could not silence ALSA:", e)
-
-
+# -----------------------------
+# UTILITY
+# -----------------------------
 def state(msg):
+    """For big state transitions/messages."""
     print(f"\n>>> {msg}\n")
     sys.stdout.flush()
 
 
-def say(text):
-    """Text-to-speech"""
-
-    engine = pyttsx3.init(driverName = 'espeak')
-    # voices = engine.getProperty('voices')
-    # engine.setProperty('voice',voices[11].id) #English
-    # engine = pyttsx3.init()
-    engine.say(text)
-    engine.runAndWait()
-
-
-def state(msg):
-    print(f"\n>>> {msg}\n")
+def debug(msg):
+    """For debug logging."""
+    print(f"[DEBUG] {msg}")
     sys.stdout.flush()
 
 
-# -----------------------------------------------------
-# CONFIG
-# -----------------------------------------------------
-GENAI_API_KEY = "AIzaSyB4akC2LeTmRn7551CoVEQNXaegcKx9ypw"
-genai.configure(api_key=GENAI_API_KEY)
+# -----------------------------
+# TTS WITH PIPER (Windows-safe, with STT mute)
+# -----------------------------
+class TTS:
+    def __init__(self, voice_file=PIPER_VOICE_FILE, bot_ref=None):
+        """
+        bot_ref: GuideBot instance (so we can toggle its stt_muted flag).
+        """
+        state("Loading Piper voice...")
+        self.voice = PiperVoice.load(voice_file)
+        state ("finished loading piper")
+        self.bot_ref = bot_ref
 
-WAKE_PHRASES = ["hey alpaca", "alpaca", "hello alpaca", "can you help me", "help"]
-LANGUAGE = "en-US"
-COMMAND_TIMEOUT = 25
+    def speak(self, text):
+        """
+        - Synthesizes text to a temp WAV file.
+        - Loads it fully into memory.
+        - Deletes the file (or tries).
+        - Plays from memory using sounddevice.
+        - Mutes STT during speak to avoid the robot hearing itself.
+        """
+        if not text.strip():
+            return
 
-# -----------------------------------------------------
-# Room coordinates
-# -----------------------------------------------------
-ROOM_COORDS = {
-    3140: [0.3, 17.706],
-    3141: [0.3, 17.706],
-    3150: [0.3, 8.743],
-    3160: [3.2, 7.1],
-    3161: [4.567, -4.880],
-    3170: [0.3, -9.543],
-    3171: [0.3, -9.543],
-}
+        temp_file = "tts_output.wav"
+
+        # Mute STT so the robot doesn't hear its own voice
+        if self.bot_ref is not None:
+            self.bot_ref.stt_muted = True
+
+        # Generate WAV file
+        with wave.open(temp_file, "wb") as wf:
+            self.voice.synthesize_wav(text, wf)
+
+        # Read entire file into memory (this is just to avoid my Windows lock during playback)
+        with wave.open(temp_file, "rb") as wf:
+            data = wf.readframes(wf.getnframes())
+            framerate = wf.getframerate()
+
+        # Try to delete the temp file safely
+        try:
+            os.remove(temp_file)
+        except PermissionError:
+            # If Windows still holds a lock, just skip deletion;
+            # the file will be overwritten next time.
+            debug("Could not delete tts_output.wav (in use); skipping delete.")
+
+        # Convert to numpy and play
+        audio = np.frombuffer(data, dtype=np.int16)
+        sd.play(audio, framerate)
+        sd.wait()
+
+        # Small delay to avoid catching residual audio
+        time.sleep(0.15)
+
+        # Unmute STT
+        if self.bot_ref is not None:
+            self.bot_ref.stt_muted = False
 
 
-def get_coords(room_number):
-    return ROOM_COORDS.get(room_number, None)
+# -----------------------------
+# STT WITH WHISPER 
+# -----------------------------
+audio_queue = queue.Queue()
 
 
-# -----------------------------------------------------
-# LLM extraction
-# -----------------------------------------------------
-EXTRACTION_PROMPT = """
-You are a navigation interpreter. ONLY output JSON.
+class STT:
+    def __init__(self, model_name=WHISPER_MODEL, bot_ref=None):
+        state(f"Loading Whisper model ({model_name})...")
+        self.model = WhisperModel(model_name, device="cpu", compute_type="int8")
+        self.bot_ref = bot_ref  # GuideBot, for checking stt_muted
 
-Task:
-- Identify the target room number.
-- Convert number-words to digits.
-- Ignore irrelevant text.
+    def audio_callback(self, indata, frames, time_info, status):
+        """
+        Called by sounddevice in the audio thread whenever there's new mic data.
+        """
+        # If TTS is speaking, ignore input (prevents echo from robot itself)
+        if self.bot_ref is not None and getattr(self.bot_ref, "stt_muted", False):
+            return
 
-Output EXACTLY this format:
-{{
-  "target_room": <int or null>,
-}}
+        if status:
+            print(f"Audio Status: {status}")
 
-User said: "{utterance}"
-"""
+        audio_data = np.squeeze(indata.copy())
+        rms = np.sqrt(np.mean(audio_data ** 2))
+
+        # Simple VAD: only queue audio if above RMS threshold
+        if rms > RMS_THRESHOLD:
+            audio_queue.put(audio_data)
+
+    def transcribe_audio_chunk(self, audio_chunk):
+        """
+        Transcribe one chunk of audio.
+        Set beam_size=1 and vad_filter=False to make it faster
+        """
+        segments, _ = self.model.transcribe(
+            audio_chunk,
+            language = 'en',
+            task="transcribe",
+            beam_size=1,      # faster than beam_size=5
+            vad_filter=False  # already using an RMS-based VAD
+        )
+        text = " ".join(segment.text for segment in segments).strip()
+        return text.lower()
+
+    def run_transcription_loop(self, pipeline_handler, exit_flag):
+        """
+        Main loop for the STT thread:
+        - Pull audio from queue,
+        - Run transcription,
+        - Pass text back into GuideBot.
+        """
+        state("Starting transcription loop...")
+        while not exit_flag.is_set():
+            try:
+                audio_chunk = audio_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+            try:
+                text = self.transcribe_audio_chunk(audio_chunk)
+            except Exception as e:
+                print("[STT ERROR]", e)
+                continue
+
+            if text:
+                print(f"[STT] Heard: {text}")
+                pipeline_handler.process_stt_result(text)
 
 
-def extract_room(utterance):
-    prompt = EXTRACTION_PROMPT.format(utterance=utterance)
-    model = genai.GenerativeModel("gemini-2.5-flash")
+# -----------------------------
+# LLM Client
+# -----------------------------
+class LLMClient:
+    def __init__(self):
+        self.model = genai.GenerativeModel("gemini-2.5-flash")
 
-    try:
-        response = model.generate_content(prompt)
-        raw = response.text.replace("```json", "").replace("```", "").strip()
+    def extract_room(self, utterance):
+        """
+        Ask the LLM to extract a room number from the utterance.
+        Returns int room_number or None.
+        """
+        prompt = EXTRACTION_PROMPT.format(utterance = utterance)
+        try:
+            response = self.model.generate_content(prompt)
 
-        match = re.search(r"\{[\s\S]*\}", raw)
-        if not match:
+
+            raw = response.text or ""
+
+
+            print (f'raw response {response.text}')           
+            # Clean out code fences if any
+            raw = raw.replace("```json", "").replace("```", "").strip()
+            match = re.search(r"\{[\s\S]*\}", raw)
+            if not match:
+                debug(f"LLM output had no JSON object: {raw}")
+                return None
+            data = json.loads(match.group(0))
+            return data.get("target_room")
+        except Exception as e:
+            print("[LLM ERROR]", e)
             return None
 
-        data = json.loads(match.group(0))
-        return data.get("target_room")
-
-    except Exception as e:
-        print("[LLM ERROR]", e)
+def normalize_room_number(raw_number, valid_rooms):
+    """
+    Snap a noisy STT room number to the closest valid room.
+    """
+    try:
+        raw = int(round(float(raw_number)))
+    except ValueError:
         return None
 
-
-# -----------------------------------------------------
-# Speech helpers
-# -----------------------------------------------------
-def passive_listen(r, mic):
-    """Wait for wake phrase."""
-    state("Passive Listening — say 'Hey Alpaca'...")
-    with mic as source:
-        r.adjust_for_ambient_noise(source, duration=0.3)
-        audio = r.listen(source, phrase_time_limit=4)
-
-    try:
-        text = r.recognize_google(audio, language=LANGUAGE).lower()
-        print(f"[hearing] {text}")
-        return any(w in text for w in WAKE_PHRASES)
-    except:
-        return False
+    # Choose closest valid room
+    return min(valid_rooms, key=lambda r: abs(r - raw))
 
 
-def capture_sentence(r, mic):
-    state("[Listening for navigation request...]")
-    with mic as source:
-        audio = r.listen(source, timeout=COMMAND_TIMEOUT, phrase_time_limit=COMMAND_TIMEOUT)
+# -----------------------------
+# Pipeline for GuideBot
+# -----------------------------
+class GuideBot:
+    def __init__(self):
+        # Flag used by STT to ignore mic input while TTS is speaking
+        self.stt_muted = False
 
-    state("[processing…]")
-    try:
-        text = r.recognize_google(audio, language=LANGUAGE)
-        state(f"Captured: {text}")
-        return text.strip()
-    except:
-        state("Could not understand.")
-        return ""
+        # STT & TTS get a reference back to this GuideBot
+        self.stt = STT(bot_ref=self)
+        self.tts = TTS(bot_ref=self)
+        self.llm = LLMClient()
+
+        self.exit_flag = threading.Event()
+        self.awaiting_command = False
+        self.command_buffer = ""
+
+        rclpy.init()
+        self.node = AlpacaInteractionNode()
+        rclpy.spin_once(self.node, timeout_sec=0.1)
+        self.node.get_logger().info("Alpaca Interaction Node Started")
 
 
-# -----------------------------------------------------
-# MAIN LOOP
-# -----------------------------------------------------
-def guidebot_main():
-    r = sr.Recognizer()
-    mic = sr.Microphone()
 
-    rclpy.init()
+    def process_stt_result(self, text):
+        """
+        Called by STT whenever we get a recognized chunk of speech.
+        """
+        if not self.awaiting_command:
+            # We are in PASSIVE mode: look for wake phrase in the recognized text
+            if any(w in text for w in WAKE_PHRASES):
+                debug(f"Wake phrase detected in: {text!r}")
+                self.tts.speak("How can I help you?")
+                state("Listening for your navigation command...")
+                self.awaiting_command = True
+                self.command_buffer = ""
+        else:
+            # We are in ACTIVE mode: buffer this entire chunk as "the command"
+            # (basically one chunk becomes the command)
+            self.command_buffer += " " + text
+            utterance = self.command_buffer.strip()
+            debug(f"Captured command utterance: {utterance!r}")
 
-    node = AlpacaInteractionNode()
-    rclpy.spin_once(node, timeout_sec=0.1)
-    node.get_logger().info("Alpaca Interaction Node started.")
+            # Immediately handle the command (same as your original code)
+            self.handle_command(utterance)
 
-    state("GuideBot started.")
+            # Reset back to passive listening
+            self.awaiting_command = False
+            self.command_buffer = ""
 
-    while True:
-        # ---- Passive listening mode ----
-        if not passive_listen(r, mic):
-            continue
-
-        # Wake word detected
-        say("How can I help you?")
-        utterance = capture_sentence(r, mic)
-
+    def handle_command(self, utterance):
+        """
+        Given the command utterance, call LLM to get a room,
+        fetch coordinates, and speak + print navigation info.
+        """
         if not utterance:
-            say("Sorry, I didn't catch that.")
-            continue
+            self.tts.speak("Sorry, I didn't catch that.")
+            return
 
-        # Extract target room
-        target_room = extract_room(utterance)
-        if not target_room:
-            say("I could not find a room number in your request.")
-            continue
+        # Get room number from LLM
+        target_room = self.llm.extract_room(utterance)
+        target_room = self.llm.extract_room(utterance)
+
+        if not target_room or target_room not in ROOM_COORDS or target_room is None:
+            self.tts.speak("I could not find a room number in your request.")
+            return
+
+        #  snap to closest valid room
+        # normalized_room = normalize_room_number(
+        #     target_room,
+        #     ROOM_COORDS.keys()
+        # )
+
+        # if normalized_room != target_room:
+        #     debug(f"Normalized room {target_room} → {normalized_room}")
+
+        # target_room = normalized_room
+
+
 
         coords = get_coords(target_room)
-        
-        if coords is None:
-            say(f"Sorry, I don't know where room {target_room} is.")
+        if not coords:
+            self.tts.speak(f"Sorry, I don't know where room {target_room} is.")
             print(f"Unknown room {target_room}")
-            continue
+            return
 
-        node.publish_coords(coords[0], coords[1])  # Publish target coordinates
+        self.node.publish_coords(coords[0],coords[1])
 
-        # Confirm to user
-        say(f"Okay, guiding to room {target_room}.")
+        # Confirm and print
+        self.tts.speak(f"Okay, guiding to {target_room}.")
         print("\n=== Navigation Command ===")
         print(f"Destination Room: {target_room}")
         print(f"Coordinates: {coords}")
         print("==========================\n")
-
-        # Return immediately to passive listening
         state("Returning to passive listening...")
 
-
-# -----------------------------------------------------
-# Text input helpers (non-speech path)
-# -----------------------------------------------------
-def process_utterance(utterance, node):
-    """Process a plain-text utterance through the existing pipeline.
-
-    This mirrors the behavior used after speech recognition so callers
-    can supply text directly for testing or unreliable STT.
-    """
-    utterance = (utterance or "").strip()
-    if not utterance:
-        say("Sorry, I didn't catch that.")
-        return False
-
-    # Extract target room
-    target_room = extract_room(utterance)
-    if not target_room:
-        say("I could not find a room number in your request.")
-        return False
-
-    coords = get_coords(target_room)
-    if coords is None:
-        say(f"Sorry, I don't know where room {target_room} is.")
-        print(f"Unknown room {target_room}")
-        return False
-
-    # Publish target coordinates
-    node.publish_coords(coords[0], coords[1])
-
-    # Confirm to user
-    say(f"Okay, guiding to room {target_room}.")
-    print("\n=== Navigation Command ===")
-    print(f"Destination Room: {target_room}")
-    print(f"Coordinates: {coords}")
-    print("==========================\n")
-
-    return True
-
-
-def text_input_mode(node):
-    """Interactive loop accepting plain text utterances from the user.
-
-    Callers can create the `AlpacaInteractionNode` then call this function
-    to route typed input through the same pipeline used for speech.
-    """
-    state("Text-input mode — type requests (or 'quit' to exit)")
-    try:
-        while True:
-            try:
-                line = input("utterance> ")
-            except EOFError:
-                break
-
-            if not line:
-                continue
-            if line.strip().lower() in ("quit", "exit"):
-                state("Exiting text-input mode.")
-                break
-
-            process_utterance(line, node)
-    except KeyboardInterrupt:
-        state("Exiting text-input mode.")
+    def run(self):
+        """
+        Main loop:
+        - Start audio stream
+        - Start STT thread
+        - Idle until Ctrl+C
+        """
 
 
 
-def main():
-    # Allow selecting text-input mode via command-line flag
-    use_text_mode = False
-    args = sys.argv[1:]
-    if any(a in ("--text", "--text-input", "-t") for a in args):
-        use_text_mode = True
+        stream = sd.InputStream(
+            samplerate=SAMPLE_RATE,
+            channels=1,
+            dtype="float32",
+            callback=self.stt.audio_callback,
+            blocksize=CHUNK_SIZE
+        )
 
-    try:
-        if use_text_mode:
-            rclpy.init()
-            node = AlpacaInteractionNode()
-            rclpy.spin_once(node, timeout_sec=0.1)
-            try:
-                text_input_mode(node)
-            finally:
-                rclpy.shutdown()
-                print("Shutting down.")
-        else:
-            try:
-                guidebot_main()
-            except KeyboardInterrupt:
-                rclpy.shutdown()
-                print("Shutting down.")
-    except KeyboardInterrupt:
+        stream.start()
+
+        stt_thread = threading.Thread(
+            target=self.stt.run_transcription_loop,
+            args=(self, self.exit_flag),
+            daemon=True
+        )
+        stt_thread.start()
+
+        state("Alpaca is running. Speak 'Help me, Alpaca', or 'Help'to wake me up!")
+
         try:
-            rclpy.shutdown()
-        except Exception:
-            pass
-        print("Shutting down.")
+            while not self.exit_flag.is_set():
+                time.sleep(0.1)
+        except KeyboardInterrupt:
+            print("Shutting down...")
+        finally:
+            self.exit_flag.set()
+            if stream.active:
+                stream.stop()
+            print("Alpaca stopped.")
 
 
+# -----------------------------
+# MAIN
+# -----------------------------
 if __name__ == "__main__":
-    main()
-
+    bot = GuideBot()
+    bot.run()

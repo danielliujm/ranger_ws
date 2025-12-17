@@ -152,7 +152,7 @@ TODO: add permanent fix in launch file
  ```
 save the map with 
 ```
-ros2 run nav2_map_server map_saver_cli -f my_map
+ros2 run nav2_map_server map_saver_cli -f my_map --mode raw
 ```
 
 to load a saved map and visualize (publish to /map)

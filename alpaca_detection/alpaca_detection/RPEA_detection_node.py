@@ -52,7 +52,7 @@ class RPEADetectionNode(Node):
         self.run_detection()
 
     
-    def run_detection (self, score_threshold=0.85):
+    def run_detection (self, score_threshold=0.6):
         if self.detector is None:
             self.initialize_detector(self.ckpt_path, use_gpu=True)
         
