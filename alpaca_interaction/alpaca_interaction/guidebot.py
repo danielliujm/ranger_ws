@@ -35,8 +35,13 @@ import rclpy
 # -----------------------------
 # CONFIGURATION
 # -----------------------------
-GENAI_API_KEY = "AIzaSyAir8vI-cqdr2Wp_IK1fZErz7OjhvrYybQ" # -- hit limit
+# GENAI_API_KEY = "AIzaSyA1-tGLWV7HavvjbZ9axw1HgQsBwJIMTjM" # -- hit limit
 # GENAI_API_KEY = "AIzaSyB4akC2LeTmRn7551CoVEQNXaegcKx9ypw"
+GENAI_API_KEY = "AIzaSyAXT2ugyklyxI8OUNOw-MsqU-AIMX63_qc"
+
+# GENAI_API_KEY = "AIzaSyBnHOcubC-kscE1bOFPRUjMKYOhXutSu30"
+GENAI_API_KEY = "AIzaSyDjwQDzcmcIq76F5VSQWL39C7WUweiFMI8"
+
 genai.configure(api_key=GENAI_API_KEY)
 
 WHISPER_MODEL = "small"
@@ -69,7 +74,7 @@ COMMAND_TIMEOUT = 15 # do i need this? bruh?
 # }
 
 ROOM_COORDS = {
-    3120: [32.934119474181244, 0.10128666032650913],
+    "3120": [32.934119474181244, 0.10128666032650913],
     "mens room": [22.92248035180356, -1.8145234970546478],
     "womens room": [14.581120865409886, -2.9009808579800964],
     "main elevator": [5.875413069500369, -1.512174393211807],
@@ -77,7 +82,7 @@ ROOM_COORDS = {
     "3224": [36.12771020162656, -3.042278211135972],
     "3229": [37.243819686294565, -7.4572305996676995],
     "kitchen":[37.243819686294565, -7.4572305996676995],
-    3248: [39.888493779116274, -21.058901691427295],
+    "3248": [39.888493779116274, -21.058901691427295],
 }
 
 
@@ -102,7 +107,7 @@ Given the list of rooms ROOM_COORDS = {{
 }}
 
 Task:
-- Identify the target room.
+- Identify the target room, try to match what was said with the list provided.
 - Convert room name or number to string
 - Ignore irrelevant text.
 

@@ -78,8 +78,8 @@ class SMMPPIController:
 
             u_min=torch.tensor([0.0, -0.0, -1.5], dtype=torch.float32).to(self.device),
             u_max=torch.tensor([0.6, 0.0, 1.5], dtype=torch.float32).to(self.device),
-
-            lambda_ = 0.5,
+            
+            lambda_ = 1e-2,
             kernel = mppi.RBFKernel (sigma = 2.0),
             num_support_pts=self.horizon//10,
             # w_action_seq_cost=10,
