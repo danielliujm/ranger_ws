@@ -34,9 +34,39 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from alpaca_navigation.viz_utils import *
 
+import os
+import termios
+import tty
+import select 
+
 
 
 EPSILON = 1e-12
+
+
+class NonBlockingStdin:
+    """Lightweight non-blocking stdin reader for the deadman switch."""
+
+    def __init__(self):
+        self.fd = None
+        self.old_termios = None
+        self.enabled = sys.stdin.isatty()
+        if self.enabled:
+            self.fd = sys.stdin.fileno()
+            self.old_termios = termios.tcgetattr(self.fd)
+            tty.setcbreak(self.fd)
+
+    def restore(self):
+        if self.enabled and self.old_termios is not None:
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_termios)
+
+    def get_key(self):
+        if not self.enabled:
+            return None
+        ready, _, _ = select.select([sys.stdin], [], [], 0)
+        if ready:
+            return sys.stdin.read(1)
+        return None
 
 class MPPLocalPlannerMPPI(Node):
     def __init__(self, pose_source_override=None, safety = 'off'):
@@ -141,6 +171,61 @@ class MPPLocalPlannerMPPI(Node):
         
         # safety no movement if safety is on 
         self.safety = (safety == 'on')
+
+        # Start a separate thread to monitor keyboard input deadman switch
+        self.space_timeout = 0.15
+        self.last_space_time = 0.0
+        self.running = False
+        self.keyboard = None
+        self.key_thread = None
+        if self.safety:
+            self.running = True
+            self.keyboard = NonBlockingStdin()
+            self.key_thread = Thread(target=self.key_loop, daemon=True)
+            self.key_thread.start()
+    
+    def key_loop(self):
+        while self.running and rclpy.ok():
+            if self.keyboard is None:
+                time.sleep(0.05)
+                continue
+            key = self.keyboard.get_key()
+            if key == " ":
+                self.last_space_time = time.time()
+            time.sleep(0.01)
+
+    def deadman_active(self):
+        """Return True when motion is allowed under the safety deadman switch."""
+        if not self.safety:
+            return True
+        return (time.time() - self.last_space_time) <= self.space_timeout
+
+    def publish_twist_command(self, twist_msg):
+        """Publish `twist_msg` or zeros depending on the deadman state."""
+        if not self.safety:
+            self.cmd_vel_pub.publish(twist_msg)
+            return
+
+        if self.deadman_active():
+            self.cmd_vel_pub.publish(twist_msg)
+        else:
+            self.cmd_vel_pub.publish(Twist())
+
+    def destroy_node(self):
+        self.running = False
+        try:
+            thread = getattr(self, "key_thread", None)
+            if thread is not None and thread.is_alive():
+                thread.join(timeout=0.5)
+        except Exception:
+            pass
+        try:
+            keyboard = getattr(self, "keyboard", None)
+            if keyboard is not None:
+                keyboard.restore()
+        except Exception:
+            pass
+        super().destroy_node()
 
 
     def goal_cb (self, msg):
@@ -435,8 +520,8 @@ class MPPLocalPlannerMPPI(Node):
             # twist_stamped.angular.z = 0.0
 
             # twist_stamped.angular.z = action[1].item() #min(action[1].item(), VMAX)
-            if not self.safety:
-                self.cmd_vel_pub.publish(twist_stamped)
+
+            self.publish_twist_command(twist_stamped)
             
                       
             self.linear_velocities.append(x_effort)
@@ -467,9 +552,11 @@ class MPPLocalPlannerMPPI(Node):
                     self.get_logger().warn('/next_goal service not ready when goal reached.')
             except Exception as e:
                 self.get_logger().error(f'Exception while calling /next_goal: {e}')
+            self.publish_twist_command(Twist())
            
         else:
             self.get_logger().warn("Failed to compute optimal controls")
+            self.publish_twist_command(Twist())
 
 
 

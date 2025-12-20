@@ -256,13 +256,13 @@ class SMMPPIController:
         action_cost = torch.sum((action[:, 1:, 0] - action[:, :-1, 0])**2, dim=1) + torch.sum((action[:, 1:, 2] - action[:, :-1, 2])**2, dim=1)
 
         # obstacle cost from nav2 costmap 
-        pos_in_costmap_frame = (state_squeezed[:,:,:2] - torch.tensor ([self.local_costmap.origin_x, self.local_costmap.origin_y], device=self.device)) 
-        grid_x = torch.clamp((pos_in_costmap_frame[:,:,0] / self.local_costmap.resolution).long(), 0, self.local_costmap.width -1)
-        grid_y = torch.clamp((pos_in_costmap_frame[:,:,1] / self.local_costmap.resolution).long(), 0, self.local_costmap.height -1)
-        costmap_cost = self.local_costmap.data[grid_y.cpu().numpy(), grid_x.cpu().numpy()]  # Shape: (N, T')
-        costmap_cost_tensor = torch.tensor(costmap_cost, dtype=torch.float32, device=self.device)
-        costmap_cost_tensor = torch.where (costmap_cost_tensor > 90, 10e+8, 0)
-        costmap_cost_sum = torch.sum(costmap_cost_tensor, dim=1)
+        # pos_in_costmap_frame = (state_squeezed[:,:,:2] - torch.tensor ([self.local_costmap.origin_x, self.local_costmap.origin_y], device=self.device)) 
+        # grid_x = torch.clamp((pos_in_costmap_frame[:,:,0] / self.local_costmap.resolution).long(), 0, self.local_costmap.width -1)
+        # grid_y = torch.clamp((pos_in_costmap_frame[:,:,1] / self.local_costmap.resolution).long(), 0, self.local_costmap.height -1)
+        # costmap_cost = self.local_costmap.data[grid_y.cpu().numpy(), grid_x.cpu().numpy()]  # Shape: (N, T')
+        # costmap_cost_tensor = torch.tensor(costmap_cost, dtype=torch.float32, device=self.device)
+        # costmap_cost_tensor = torch.where (costmap_cost_tensor > 90, 10e+8, 0)
+        # costmap_cost_sum = torch.sum(costmap_cost_tensor, dim=1)
         
         # cv
         cv_cost = torch.zeros(self.num_samples).to(self.device)
@@ -314,11 +314,11 @@ class SMMPPIController:
         cv_weight = 100
         terminal_goal_weight = 0 #1000
 
-        print (f'terminal goal cost is {terminal_goal_cost.mean().item() * terminal_goal_weight} \n \
-               action cost is {torch.mean(action_cost).item() * action_weight} \n \
-               heading cost is  {torch.mean(heading_cost).item() * heading_weight} \n\
-               cv cost is {torch.mean(cv_cost).item() * cv_weight} \n \
-               mean goal cost is {torch.mean(goal_cost).item() * goal_weight} ')
+        # print (f'terminal goal cost is {terminal_goal_cost.mean().item() * terminal_goal_weight} \n \
+        #        action cost is {torch.mean(action_cost).item() * action_weight} \n \
+        #        heading cost is  {torch.mean(heading_cost).item() * heading_weight} \n\
+        #        cv cost is {torch.mean(cv_cost).item() * cv_weight} \n \
+        #        mean goal cost is {torch.mean(goal_cost).item() * goal_weight} ')
 
 
 
@@ -327,8 +327,8 @@ class SMMPPIController:
                 + heading_weight * heading_cost  \
                     + dynamic_obstacle_weight*dynamic_obstacle_costs \
                         + sm_weight * sm_costs + cv_weight * cv_cost\
-                            + costmap_weight * costmap_cost_sum \
-                                + heading_cost * heading_weight
+                            # + costmap_weight * costmap_cost_sum \ 
+                            # + heading_cost * heading_weight
 
         
 

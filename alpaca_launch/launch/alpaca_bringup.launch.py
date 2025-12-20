@@ -41,7 +41,7 @@ def generate_launch_description():
     
     lidar_bringup_launch = IncludeLaunchDescription (
         PythonLaunchDescriptionSource(
-            [os.path.join(get_package_prefix ("velodyne"), "share", "velodyne_driver", "launch", "velodyne_driver_node-VLP16-launch.py")],
+            [os.path.join(get_package_prefix ("velodyne_driver"), "share", "velodyne_driver", "launch", "velodyne_driver_node-VLP16-launch.py")],
         ),
         # launch_arguments = {'ros-arguments':'--ros-args -r /velodyne_points:=/filtered_cloud'}.items(),
         condition = IfCondition(use_lidar),
@@ -49,7 +49,7 @@ def generate_launch_description():
 
     lidar_pointcloud_bringup_launch = IncludeLaunchDescription (
         PythonLaunchDescriptionSource(
-            [os.path.join(get_package_prefix ("velodyne"), "share", "velodyne_pointcloud", "launch", "velodyne_transform_node-VLP16-launch.py")],
+            [os.path.join(get_package_prefix ("velodyne_pointcloud"), "share", "velodyne_pointcloud", "launch", "velodyne_transform_node-VLP16-launch.py")],
         ),
         # launch_arguments = {'ros-arguments':'--ros-args -r /velodyne_points:=/filtered_cloud'}.items(),
         condition = IfCondition(use_lidar),

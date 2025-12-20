@@ -12,6 +12,10 @@ def generate_launch_description():
         'map', default_value='/path/to/map', description='Path to the map yaml/pgm'
     )
 
+    safety_arg = DeclareLaunchArgument(
+        'safety', default_value='on', description='Enable safety deadman switch'
+    )
+
     params_arg = DeclareLaunchArgument(
         'params_file',
         default_value='/home/dliujm/ranger_ws/src/nav2_params/navigation_params.yaml',
@@ -35,6 +39,7 @@ def generate_launch_description():
         executable='mppi_controller_node',
         name='mppi_controller_node',
         output='screen',
+        arguments = ['--safety', LaunchConfiguration('safety')],
         parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
     )
 
@@ -61,6 +66,7 @@ def generate_launch_description():
     ld.add_action(map_arg)
     ld.add_action(params_arg)
     ld.add_action(use_sim_time_arg)
+    ld.add_action(safety_arg)
     ld.add_action(mppi_pkg_arg)
     ld.add_action(plan_pkg_arg)
 
