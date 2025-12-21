@@ -56,7 +56,7 @@ class SMMPPIController:
 
         # Initialize MPPI with the dynamics and cost functions
         cov = torch.eye(3, dtype=torch.float32).to(self.device)
-        cov[0, 0] = 0.02 #0.001
+        cov[0, 0] = 0.2#0.001
         cov[1, 1] = 10e-8 #0.001
         cov[2, 2] = 0.02 #0.001
         # MPPI initialization
@@ -76,18 +76,25 @@ class SMMPPIController:
             step_dependent_dynamics=True,
 
 
-            u_min=torch.tensor([0.0, -0.0, -1.5], dtype=torch.float32).to(self.device),
+            u_min=torch.tensor([0.0, 0.0, -1.5], dtype=torch.float32).to(self.device),
             u_max=torch.tensor([0.6, 0.0, 1.5], dtype=torch.float32).to(self.device),
             
-            lambda_ = 1e-2,
-            kernel = mppi.RBFKernel (sigma = 2.0),
-            num_support_pts=self.horizon//10,
+            # action_max=torch.tensor([0.6, 1.0, 1.5], dtype=torch.float32).to(self.device),
+            # action_min=torch.tensor([0.0, 0.0, -1.5], dtype=torch.float32).to(self.device),
+
+            lambda_ = 1,
+            # delta_t = self.dt,
+            kernel = mppi.RBFKernel (sigma = 3.0),
+            num_support_pts=self.horizon//4,
             # w_action_seq_cost=10,
 
            
 
-            U_init = U_init
+            # U_init = U_init
         )
+
+        self.candidate_states = None
+        self.candidate_costs = None
     
     def set_goal (self, goal):
         self.goal = goal.to(self.device)
@@ -95,6 +102,17 @@ class SMMPPIController:
     
     def set_local_costmap (self, msg):
         self.local_costmap = Costmap (msg)
+
+        ################ debug. ###########################
+        # data = self.local_costmap.data
+        # counter = 0 
+        # for i in range (self.local_costmap.height):
+        #     for j in range (self.local_costmap.width):
+        #         if data[i][j] > 90:
+        #             counter += 1
+        # print (f'number of occupied cells in local costmap is {counter} ')
+        ###########################################
+
         
 
 
@@ -186,7 +204,7 @@ class SMMPPIController:
         # dual ackermann model 
         min_turn_radius = 0.4764
         dx = torch.zeros_like(s)
-        L = 0.36
+        L = 0.494  # wheelbase
 
         turning_radius = torch.abs(a[:,0]) / torch.abs(a[:,2] + 1e-6)
 
@@ -199,14 +217,13 @@ class SMMPPIController:
         dx2_curved = 2 * a[:,0] * torch.sin(a[:,2]) / L
 
         # when turning radius is below threshold, fall back to angular-only update
-        dx0_straight = torch.zeros_like(dx0_curved)
-        dx1_straight = torch.zeros_like(dx1_curved)
-        dx2_straight = a[:,2]
+        dx0_rotate = torch.zeros_like(dx0_curved)
+        dx1_rotate = torch.zeros_like(dx1_curved)
+        dx2_rotate = a[:,2]
 
-        dx[:,0] = torch.where(mask, dx0_straight, dx0_curved)
-        dx[:,1] = torch.where(mask, dx1_straight, dx1_curved)
-        dx[:,2] = torch.where(mask, dx2_straight, dx2_curved)
-
+        dx[:,0] = torch.where(mask, dx0_rotate, dx0_curved)
+        dx[:,1] = torch.where(mask, dx1_rotate, dx1_curved)
+        dx[:,2] = torch.where(mask, dx2_rotate, dx2_curved)
         s3_global = s + dx * dt
 
         return s3_global
@@ -252,17 +269,23 @@ class SMMPPIController:
         
         # action cost -- how sporatic the action is 
         action = action.squeeze()
-        # action shape is (num_particles, horizon, 3)
         action_cost = torch.sum((action[:, 1:, 0] - action[:, :-1, 0])**2, dim=1) + torch.sum((action[:, 1:, 2] - action[:, :-1, 2])**2, dim=1)
 
         # obstacle cost from nav2 costmap 
-        # pos_in_costmap_frame = (state_squeezed[:,:,:2] - torch.tensor ([self.local_costmap.origin_x, self.local_costmap.origin_y], device=self.device)) 
-        # grid_x = torch.clamp((pos_in_costmap_frame[:,:,0] / self.local_costmap.resolution).long(), 0, self.local_costmap.width -1)
-        # grid_y = torch.clamp((pos_in_costmap_frame[:,:,1] / self.local_costmap.resolution).long(), 0, self.local_costmap.height -1)
-        # costmap_cost = self.local_costmap.data[grid_y.cpu().numpy(), grid_x.cpu().numpy()]  # Shape: (N, T')
-        # costmap_cost_tensor = torch.tensor(costmap_cost, dtype=torch.float32, device=self.device)
-        # costmap_cost_tensor = torch.where (costmap_cost_tensor > 90, 10e+8, 0)
-        # costmap_cost_sum = torch.sum(costmap_cost_tensor, dim=1)
+        pos_in_costmap_frame = (state_squeezed[:,:,:2] - torch.tensor ([self.local_costmap.origin_x, self.local_costmap.origin_y], device=self.device)) 
+        grid_x = torch.clamp((pos_in_costmap_frame[:,:,0] / self.local_costmap.resolution).long(), 0, self.local_costmap.width -1)
+        grid_y = torch.clamp((pos_in_costmap_frame[:,:,1] / self.local_costmap.resolution).long(), 0, self.local_costmap.height -1)
+        costmap_cost = self.local_costmap.data[grid_y.cpu().numpy(), grid_x.cpu().numpy()]  # Shape: (N, T')
+
+        # costmap_cost = self.local_costmap.data [grid_y.cpu().numpy()*self.local_costmap.width + grid_x.cpu().numpy()]  # Shape: (N, T')
+        # costmap_cost = self.local_costmap.data[grid_x.cpu().numpy(), grid_y.cpu().numpy()]  # Shape: (N, T')
+
+
+        costmap_cost_tensor = torch.tensor(costmap_cost, dtype=torch.float32, device=self.device)
+        
+        costmap_cost_tensor = torch.where (costmap_cost_tensor > 90, 10e+8, costmap_cost_tensor)
+        costmap_cost_tensor = costmap_cost_tensor
+        costmap_cost_sum = torch.sum(costmap_cost_tensor, dim=1)
         
         # cv
         cv_cost = torch.zeros(self.num_samples).to(self.device)
@@ -312,24 +335,33 @@ class SMMPPIController:
         sm_weight = 10
         costmap_weight = 1
         cv_weight = 100
-        terminal_goal_weight = 0 #1000
+        terminal_goal_weight = 1000 #1000
 
-        # print (f'terminal goal cost is {terminal_goal_cost.mean().item() * terminal_goal_weight} \n \
-        #        action cost is {torch.mean(action_cost).item() * action_weight} \n \
-        #        heading cost is  {torch.mean(heading_cost).item() * heading_weight} \n\
-        #        cv cost is {torch.mean(cv_cost).item() * cv_weight} \n \
-        #        mean goal cost is {torch.mean(goal_cost).item() * goal_weight} ')
+        print (f'min terminal goal cost is {terminal_goal_cost.min().item() * terminal_goal_weight} \n \
+               min action cost is {torch.min(action_cost).item() * action_weight} \n \
+               min heading cost is  {torch.min(heading_cost).item() * heading_weight} \n\
+               min costmap cost is {torch.min(costmap_cost_sum).item() * costmap_weight} \n \
+               min cv cost is {torch.min(cv_cost).item() * cv_weight} \n \
+               min goal cost is {torch.min(goal_cost).item() * goal_weight} ')
 
 
-
-        return goal_weight*(goal_cost)  + terminal_goal_cost * terminal_goal_weight \
+        cost = goal_weight*(goal_cost)  + terminal_goal_cost * terminal_goal_weight \
             + action_weight*action_cost \
                 + heading_weight * heading_cost  \
                     + dynamic_obstacle_weight*dynamic_obstacle_costs \
                         + sm_weight * sm_costs + cv_weight * cv_cost\
-                            # + costmap_weight * costmap_cost_sum \ 
-                            # + heading_cost * heading_weight
+                            + costmap_weight * costmap_cost_sum
+        
+        ###### for visualization ######
+        self.candidate_states = state_squeezed
+        self.candidate_costs = cost
+        ############################## 
 
+
+        return  cost
+
+    def get_candidate_states_and_costs(self):
+        return self.candidate_states, self.candidate_costs
         
 
     def get_interacting_agents(self):

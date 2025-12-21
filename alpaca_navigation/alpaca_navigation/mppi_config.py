@@ -6,7 +6,7 @@ NOW = datetime.now()
 
 VMAX = 1.4 #0.7
 DT = 0.4
-HORIZON_LENGTH =  20 #16
+HORIZON_LENGTH =  30 #16
 MAX_AGENT_NUM = 14
 ACTIVE_AGENTS = 1
 AGENT_GOALS = np.array([[0.0,-2.35], [0.0, 2.75]]) #goal of the agents, only required for evaluation metrics

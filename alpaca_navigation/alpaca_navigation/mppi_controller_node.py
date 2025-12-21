@@ -92,7 +92,7 @@ class MPPLocalPlannerMPPI(Node):
         self.get_logger().info(f'Horizion lenght :{self.controller.horizon}')
         self.counter = 0
         self.filtered_action = torch.tensor([0.0, 0.0,0.0], dtype=torch.float32).to(self.device)
-        self.alpha = 0.7
+        self.alpha = 1.0
     
         
 
@@ -198,6 +198,14 @@ class MPPLocalPlannerMPPI(Node):
         """Return True when motion is allowed under the safety deadman switch."""
         if not self.safety:
             return True
+        
+        ########################################
+        # if  (time.time() - self.last_space_time) <= self.space_timeout:
+        #     print ("deadman activate")
+        # else:
+        #     print ("not activae")
+        ########################################
+
         return (time.time() - self.last_space_time) <= self.space_timeout
 
     def publish_twist_command(self, twist_msg):
@@ -478,7 +486,10 @@ class MPPLocalPlannerMPPI(Node):
 
         # publish rollouts for visualization
 
-        self.viz_tool.visualize_rollouts (self.rollouts, self.costs)
+        candidate_states, candidate_costs = self.controller.get_candidate_states_and_costs()
+
+        self.viz_tool.visualize_rollouts (candidate_states, candidate_costs, is_rollout = False)
+        self.viz_tool.visualize_rollouts (self.rollouts, self.costs, is_rollout = True)
 
         # try:
         #     self.publish_rollouts()
