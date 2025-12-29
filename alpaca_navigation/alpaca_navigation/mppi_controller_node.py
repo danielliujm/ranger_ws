@@ -83,6 +83,7 @@ class MPPLocalPlannerMPPI(Node):
         # ROS2 setup
         self.cbgroup = ReentrantCallbackGroup()
         self.cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", 1)
+        self.cmd_vel_debug = self.create_publisher(Twist, "/cmd_vel_debug", 1)
         self.timer = self.create_timer(HZ, self.plan_and_publish, callback_group=self.cbgroup)
         self.time_steps = []
         self.linear_velocities = []
@@ -216,7 +217,9 @@ class MPPLocalPlannerMPPI(Node):
 
         if self.deadman_active():
             self.cmd_vel_pub.publish(twist_msg)
+            self.cmd_vel_debug.publish(twist_msg)
         else:
+            self.cmd_vel_debug.publish(twist_msg)
             self.cmd_vel_pub.publish(Twist())
 
     def destroy_node(self):

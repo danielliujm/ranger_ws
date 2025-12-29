@@ -122,15 +122,15 @@ class VisualizationUtils:
         
         else:
             marker = Marker()
-            num_sample_to_visualize = 10
+            num_sample_to_visualize = 20
             for sample_idx in range(num_sample_to_visualize):
                 marker = Marker()
                 marker.header.frame_id = "map"
                 marker.id = sample_idx
                 marker.type = Marker.LINE_STRIP
-                marker.scale.x = 0.03
-                marker.scale.y = 0.03
-                marker.scale.z = 0.03
+                marker.scale.x = 0.01
+                marker.scale.y = 0.01
+                marker.scale.z = 0.01
                 marker.lifetime = Duration(seconds=0.07).to_msg()  # type: ignore
                 
 

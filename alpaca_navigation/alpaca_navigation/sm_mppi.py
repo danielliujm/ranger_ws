@@ -56,15 +56,15 @@ class SMMPPIController:
 
         # Initialize MPPI with the dynamics and cost functions
         cov = torch.eye(3, dtype=torch.float32).to(self.device)
-        cov[0, 0] = 0.2#0.001
+        cov[0, 0] = 0.1
         cov[1, 1] = 10e-8 #0.001
-        cov[2, 2] = 0.02 #0.001
+        cov[2, 2] = 0.1
         # MPPI initialization
         # print (f'horizon lenghth is {self.horizon} ')
         U_init = torch.zeros((self.horizon, 3)).to(self.device)
         U_init [:,0] = 0.4
 
-        self.mppi = mppi.KMPPI(
+        self.mppi = mppi.SMPPI(
             self.dynamics,
             self.cost,
             3,  # State dimension
@@ -76,17 +76,17 @@ class SMMPPIController:
             step_dependent_dynamics=True,
 
 
-            u_min=torch.tensor([0.0, 0.0, -1.5], dtype=torch.float32).to(self.device),
-            u_max=torch.tensor([0.6, 0.0, 1.5], dtype=torch.float32).to(self.device),
+            # u_min=torch.tensor([-0.3, -0.1, -0.1], dtype=torch.float32).to(self.device),
+            u_max=torch.tensor([0.1, 0.0, 0.001], dtype=torch.float32).to(self.device),
             
-            # action_max=torch.tensor([0.6, 1.0, 1.5], dtype=torch.float32).to(self.device),
-            # action_min=torch.tensor([0.0, 0.0, -1.5], dtype=torch.float32).to(self.device),
+            action_max=torch.tensor([0.6, 0.0, 1.0], dtype=torch.float32).to(self.device),
+            action_min=torch.tensor([0.0, 0.0, -1.0], dtype=torch.float32).to(self.device),
 
-            lambda_ = 1,
-            # delta_t = self.dt,
-            kernel = mppi.RBFKernel (sigma = 3.0),
-            num_support_pts=self.horizon//4,
-            # w_action_seq_cost=10,
+            lambda_ = 1000, #1e-2,
+            delta_t = 0.1,
+            # kernel = mppi.RBFKernel (sigma = 3.0),
+            # num_support_pts=self.horizon//4,
+            w_action_seq_cost=1000,
 
            
 
@@ -272,20 +272,20 @@ class SMMPPIController:
         action_cost = torch.sum((action[:, 1:, 0] - action[:, :-1, 0])**2, dim=1) + torch.sum((action[:, 1:, 2] - action[:, :-1, 2])**2, dim=1)
 
         # obstacle cost from nav2 costmap 
-        pos_in_costmap_frame = (state_squeezed[:,:,:2] - torch.tensor ([self.local_costmap.origin_x, self.local_costmap.origin_y], device=self.device)) 
-        grid_x = torch.clamp((pos_in_costmap_frame[:,:,0] / self.local_costmap.resolution).long(), 0, self.local_costmap.width -1)
-        grid_y = torch.clamp((pos_in_costmap_frame[:,:,1] / self.local_costmap.resolution).long(), 0, self.local_costmap.height -1)
-        costmap_cost = self.local_costmap.data[grid_y.cpu().numpy(), grid_x.cpu().numpy()]  # Shape: (N, T')
+        # pos_in_costmap_frame = (state_squeezed[:,:,:2] - torch.tensor ([self.local_costmap.origin_x, self.local_costmap.origin_y], device=self.device)) 
+        # grid_x = torch.clamp((pos_in_costmap_frame[:,:,0] / self.local_costmap.resolution).long(), 0, self.local_costmap.width -1)
+        # grid_y = torch.clamp((pos_in_costmap_frame[:,:,1] / self.local_costmap.resolution).long(), 0, self.local_costmap.height -1)
+        # costmap_cost = self.local_costmap.data[grid_y.cpu().numpy(), grid_x.cpu().numpy()]  # Shape: (N, T')
 
-        # costmap_cost = self.local_costmap.data [grid_y.cpu().numpy()*self.local_costmap.width + grid_x.cpu().numpy()]  # Shape: (N, T')
-        # costmap_cost = self.local_costmap.data[grid_x.cpu().numpy(), grid_y.cpu().numpy()]  # Shape: (N, T')
+        # # costmap_cost = self.local_costmap.data [grid_y.cpu().numpy()*self.local_costmap.width + grid_x.cpu().numpy()]  # Shape: (N, T')
+        # # costmap_cost = self.local_costmap.data[grid_x.cpu().numpy(), grid_y.cpu().numpy()]  # Shape: (N, T')
 
 
-        costmap_cost_tensor = torch.tensor(costmap_cost, dtype=torch.float32, device=self.device)
+        # costmap_cost_tensor = torch.tensor(costmap_cost, dtype=torch.float32, device=self.device)
         
-        costmap_cost_tensor = torch.where (costmap_cost_tensor > 90, 10e+8, costmap_cost_tensor)
-        costmap_cost_tensor = costmap_cost_tensor
-        costmap_cost_sum = torch.sum(costmap_cost_tensor, dim=1)
+        # costmap_cost_tensor = torch.where (costmap_cost_tensor > 90, 10e+8, costmap_cost_tensor)
+        # costmap_cost_tensor = costmap_cost_tensor
+        # costmap_cost_sum = torch.sum(costmap_cost_tensor, dim=1)
         
         # cv
         cv_cost = torch.zeros(self.num_samples).to(self.device)
@@ -329,20 +329,20 @@ class SMMPPIController:
         # print (f'average cv cost is {torch.mean(cv_cost).item()} ')
         goal_weight =  1000
         threshold = 0
-        action_weight = 1000 # 3000 #20000 #12000
-        heading_weight = 1000 # 20 # 200
+        action_weight = 0 #1000: setting to 0 b/c using SMPPI
+        heading_weight = 0 # 20 # 200
         dynamic_obstacle_weight = 0
         sm_weight = 10
-        costmap_weight = 1
+        costmap_weight = 0 #1
         cv_weight = 100
-        terminal_goal_weight = 1000 #1000
+        terminal_goal_weight = 1000
 
-        print (f'min terminal goal cost is {terminal_goal_cost.min().item() * terminal_goal_weight} \n \
-               min action cost is {torch.min(action_cost).item() * action_weight} \n \
-               min heading cost is  {torch.min(heading_cost).item() * heading_weight} \n\
-               min costmap cost is {torch.min(costmap_cost_sum).item() * costmap_weight} \n \
-               min cv cost is {torch.min(cv_cost).item() * cv_weight} \n \
-               min goal cost is {torch.min(goal_cost).item() * goal_weight} ')
+        # print (f'min terminal goal cost is {terminal_goal_cost.min().item() * terminal_goal_weight} \n \
+        #        min action cost is {torch.min(action_cost).item() * action_weight} \n \
+        #        min heading cost is  {torch.min(heading_cost).item() * heading_weight} \n\
+        #     #    min costmap cost is {torch.min(costmap_cost_sum).item() * costmap_weight} \n 
+        #        min cv cost is {torch.min(cv_cost).item() * cv_weight} \n \
+        #        min goal cost is {torch.min(goal_cost).item() * goal_weight} ')
 
 
         cost = goal_weight*(goal_cost)  + terminal_goal_cost * terminal_goal_weight \
@@ -350,7 +350,7 @@ class SMMPPIController:
                 + heading_weight * heading_cost  \
                     + dynamic_obstacle_weight*dynamic_obstacle_costs \
                         + sm_weight * sm_costs + cv_weight * cv_cost\
-                            + costmap_weight * costmap_cost_sum
+                            # + costmap_weight * costmap_cost_sum
         
         ###### for visualization ######
         self.candidate_states = state_squeezed
