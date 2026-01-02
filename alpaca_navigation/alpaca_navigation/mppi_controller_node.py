@@ -93,7 +93,7 @@ class MPPLocalPlannerMPPI(Node):
         self.get_logger().info(f'Horizion lenght :{self.controller.horizon}')
         self.counter = 0
         self.filtered_action = torch.tensor([0.0, 0.0,0.0], dtype=torch.float32).to(self.device)
-        self.alpha = 1.0
+        self.alpha = 0.7
     
         
 
@@ -482,6 +482,24 @@ class MPPLocalPlannerMPPI(Node):
             self.current_state, self.previous_robot_state, self.robot_velocity, self.agents, self.agents_last_seen, self.agent_velocities
         )
 
+        log_path = "debug_action_history_x_2.npy"
+        new_row = action[:,0].detach().cpu().numpy()
+        history = []
+        if os.path.exists(log_path):
+            try:
+                
+                history = np.load(log_path)
+                print ('loaded history shape: ', history.shape)
+            except Exception:
+                history = []
+        history = np.atleast_2d(history)
+        history = np.vstack([history, new_row]) if history.size else new_row[None, :]
+        np.save(log_path, history)
+        np.savetxt ("debug_action_history_x_2.txt", history)
+
+        if action.dim() != 1:
+            action = action[0]
+
 
         self.cost_pub.publish (Float32(data = torch.min (self.costs).item()))
         
@@ -511,12 +529,12 @@ class MPPLocalPlannerMPPI(Node):
             x_effort= action[0].item() if abs(action[0].item()) < VMAX else np.sign(action[0].item())*VMAX 
             y_effort = action[1].item() if abs(action[1].item()) < VMAX else np.sign(action[1].item())*VMAX 
 
-            if abs(x_effort) < 0.03:
-                x_effort = 0.0
-            if abs (y_effort) < 0.03:
+            # if abs(x_effort) < 0.01:
+            #     x_effort = 0.0
+            if abs (y_effort) < 0.01:
                 y_effort = 0.0
-            if abs (action[2].item()) < 0.1:
-                action[2] = 0.0
+            # if abs (action[2].item()) < 0.1:
+            #     action[2] = 0.0
 
 
             # self.get_logger().info(f'x y z {x_effort} {y_effort} {action[2].item()}')

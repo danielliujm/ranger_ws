@@ -56,15 +56,17 @@ class SMMPPIController:
 
         # Initialize MPPI with the dynamics and cost functions
         cov = torch.eye(3, dtype=torch.float32).to(self.device)
-        cov[0, 0] = 0.1
+        cov[0, 0] = 1
         cov[1, 1] = 10e-8 #0.001
-        cov[2, 2] = 0.1
+        cov[2, 2] = 0.002
         # MPPI initialization
         # print (f'horizon lenghth is {self.horizon} ')
         U_init = torch.zeros((self.horizon, 3)).to(self.device)
         U_init [:,0] = 0.4
 
-        self.mppi = mppi.SMPPI(
+    
+
+        self.mppi = mppi.KMPPI(
             self.dynamics,
             self.cost,
             3,  # State dimension
@@ -76,25 +78,32 @@ class SMMPPIController:
             step_dependent_dynamics=True,
 
 
-            # u_min=torch.tensor([-0.3, -0.1, -0.1], dtype=torch.float32).to(self.device),
-            u_max=torch.tensor([0.1, 0.0, 0.001], dtype=torch.float32).to(self.device),
+            u_min=torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32).to(self.device),
+            u_max=torch.tensor([0.6, 0.0, 0.0], dtype=torch.float32).to(self.device),
             
-            action_max=torch.tensor([0.6, 0.0, 1.0], dtype=torch.float32).to(self.device),
-            action_min=torch.tensor([0.0, 0.0, -1.0], dtype=torch.float32).to(self.device),
+            # action_max=torch.tensor([0.6, 0.0, 1.0], dtype=torch.float32).to(self.device),
+            # action_min=torch.tensor([0.0, 0.0, -1.0], dtype=torch.float32).to(self.device),
 
-            lambda_ = 1000, #1e-2,
-            delta_t = 0.1,
-            # kernel = mppi.RBFKernel (sigma = 3.0),
-            # num_support_pts=self.horizon//4,
-            w_action_seq_cost=1000,
+            lambda_ = 1, #1e-2,
+            # delta_t = 0.1,
+            kernel = mppi.RBFKernel (sigma = 3.0),
+            num_support_pts=self.horizon //4, 
+
+            noise_abs_cost = True, 
+
+
+            # w_action_seq_cost=1000,
+            u_per_command = HORIZON_LENGTH,
 
            
 
-            # U_init = U_init
+            # U_init = self.debug_init_action
         )
 
         self.candidate_states = None
         self.candidate_costs = None
+
+        self.prev_u = None
     
     def set_goal (self, goal):
         self.goal = goal.to(self.device)
@@ -102,18 +111,6 @@ class SMMPPIController:
     
     def set_local_costmap (self, msg):
         self.local_costmap = Costmap (msg)
-
-        ################ debug. ###########################
-        # data = self.local_costmap.data
-        # counter = 0 
-        # for i in range (self.local_costmap.height):
-        #     for j in range (self.local_costmap.width):
-        #         if data[i][j] > 90:
-        #             counter += 1
-        # print (f'number of occupied cells in local costmap is {counter} ')
-        ###########################################
-
-        
 
 
     def compute_control(self, current_state, previous_robot_state, robot_velocity, agent_states, previous_agent_states,agent_velocities): 
@@ -124,13 +121,19 @@ class SMMPPIController:
         self.agent_states = agent_states
         self.previous_agent_states = previous_agent_states
         self.agent_velocities = agent_velocities
-        action = self.mppi.command(current_state)
-        self.mppi.u_init = action
+        action = self.mppi.command(current_state, shift_nominal_trajectory= True)
+        self.mppi.u_init = action if action.dim() ==1 else action[0]
+
+    
+
         rollouts = self.mppi.get_rollouts (current_state, num_rollouts = 1)
         costs = self.mppi.cost_total.squeeze(0)
 
         termination =  torch.linalg.norm(self.current_state[:2] - self.goal) < TERMINATION_TOLERANCE
         
+
+        self.prev_u = action 
+
         return action, rollouts, costs, termination
 
     def cost(self, state: torch.Tensor, action: torch.Tensor, t) -> torch.Tensor:
@@ -152,11 +155,33 @@ class SMMPPIController:
         
         return 0
     
+
+    def steering_angle_single_action (self, action:torch.Tensor):
+        x = action[0]
+        z = action[2]
+
+        radius = x / (z + 1e-9)
+
+        is_ackermann = True if abs(radius >= MIN_TURN_RADIUS) else False
+        # k = 1
+        # if z*x < 0:
+        #     k = -1
+        
+        l = 0.494  # wheelbase ( front to back )
+        w = 0.364  # track (left to right)
+
+        print (f'calculated turning radius is {radius} m ')
+
+        # x = math.sqrt (radius**2 - (l/2)**2)
+        phi = math.atan2 ( radius, l/2)
+        return phi, is_ackermann
+    
     def calculate_steering_angle (self,action:torch.Tensor):
         x = action[:,:,0]
         z = action[:,:,2]
 
         radius = torch.tensor(x / (z + 1e-9)).to(self.device)
+        is_ackermann = torch.abs(radius) >= MIN_TURN_RADIUS
 
         # k = 1
         # if z*x < 0:
@@ -166,22 +191,9 @@ class SMMPPIController:
         w = torch.tensor(0.364).to(self.device) # track (left to right)
         x = torch.sqrt (radius**2 - (l/2)**2)
         phi = torch.atan2 ( radius, l/2)
-        return phi
+        return phi, is_ackermann
 
-    def calculate_steering_angle_cost (self, action:torch.Tensor): 
-         # action shape is ( num_particles, horizon, 3)
-        # print (f'shape of action is {action.shape} ')
-
-        steering_angles = self.calculate_steering_angle (action)  # shape: (num_particles, horizon)
-        # print (f'shape of steering angles is {steering_angles.shape} average steering angle is {torch.mean(steering_angles).item() * 57.2958} deg ')
-
-        steering_angle_diff = steering_angles[:, 1:] - steering_angles[:, :-1]  # shape: (num_particles, horizon-1)
-        # print (f'shape of steering angle diff is {steering_angle_diff.shape} ')
-
-        steering_angle_cost = torch.sum(steering_angle_diff ** 2, dim=1)  # shape: (num_particles)
-        # print (f'shape of steering angle cost is {steering_angle_cost.shape} ')
-
-        return steering_angle_cost
+    
 
 
     def dynamics(self, s: torch.Tensor, a: torch.Tensor, t=None) -> torch.Tensor:
@@ -228,74 +240,106 @@ class SMMPPIController:
 
         return s3_global
 
-
-
-
-
-    def terminal_cost(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        
+    def goal_progress_cost (self, state: torch.Tensor) -> torch.Tensor:
         goal_expanded = self.goal[None, :]
         state_squeezed = state.squeeze()
 
-        # print (f'state_squeezed shape is {state_squeezed.shape}, action shape is {action.shape} ')
+        numerator = torch.norm (goal_expanded - state_squeezed [:,1:,:2], dim = 2)
+        denominator = torch.norm (goal_expanded - state_squeezed [:,:-1,:2], dim = 2) + 1e-6
 
-        # state_squeezed shaepe is (num_particles, horizon, 3) 
-        # action shape is (1, num_particles, horizon, 3)
-
-
-        # calculated progressive goal cost 
-        numerator = torch.norm(goal_expanded-state_squeezed[:,:,:2], dim=2)# (N x T')
-
+        print (f'numerator shape is {numerator.shape} , denominator shape is {denominator.shape} ')
+        cost = numerator / denominator 
         
-        denominator = torch.norm (goal_expanded - state_squeezed[:,0,:2], dim=1) + 1e-6  # (N x T')
+        cost = cost.mean (dim = 1)
 
-        # print (f'shape of numerator is {numerator.shape} shape of denominator is {denominator.shape}')
-
-        goal_cost = numerator / denominator.unsqueeze(1)
-
-        goal_cost = goal_cost.mean (dim = 1)
-
-        # calculate terminal goal cost
-        terminal_goal_cost = torch.norm(goal_expanded - state_squeezed[:,-1,:2], dim=1)  # (N,)
-
-
-
-        # print (f'dimension of goal cost is {goal_cost.shape}')
-
-        # dynamic obstacle cost and social motion cost
-        dynamic_obstacle_costs = torch.zeros(self.num_samples).to(self.device)
-        sm_costs = torch.zeros(self.num_samples).to(self.device)
+        return cost 
     
+    def terminal_goal_cost (self, state: torch.Tensor) -> torch.Tensor:
+        goal_expanded = self.goal [None,:]
+        state_squeezed = state.squeeze()
+        cost = torch.norm(goal_expanded - state_squeezed[:,-1,:2], dim=1)  # (N,)
+        return cost
+
+    
+    
+    def steering_cost_i_axis (self, action: torch.Tensor) -> torch.Tensor: 
+        if self.prev_u is not None:
+            action = action.squeeze()  # shape is (num_particles, horizon, 3)
+
+            print (f'shape of prev steering angle is {self.prev_u[0,:].shape} ')
+            prev_steering_angle, prev_is_ackermann = self.steering_angle_single_action (self.prev_u[0,:])
+            
+            curr_steering_angle, curr_is_ackermann  = self.calculate_steering_angle (action)
+
+            print (f'shape of curr steering angle is {curr_steering_angle.shape} ')
+
+            steering_angle_diff = curr_steering_angle[:,0] - prev_steering_angle
+
+            mode_switch = curr_is_ackermann[:,0].float() != prev_is_ackermann
+            mode_switch_penalty = mode_switch * MS_COST
+
+            action_cost = steering_angle_diff ** 2 # + mode_switch_penalty
+                                                                           
+        else: 
+            action_cost = torch.zeros (self.num_samples).to(self.device)
+        return action_cost
+    
+    def steering_cost_t_axis (self, action:torch.Tensor): 
+         # action shape is ( num_particles, horizon, 3)
+        # print (f'shape of action is {action.shape} ')
+
+        steering_angles = self.calculate_steering_angle (action)  # shape: (num_particles, horizon)
+        # print (f'shape of steering angles is {steering_angles.shape} average steering angle is {torch.mean(steering_angles).item() * 57.2958} deg ')
+
+        steering_angle_diff = steering_angles[:, 1:] - steering_angles[:, :-1]  # shape: (num_particles, horizon-1)
+        # print (f'shape of steering angle diff is {steering_angle_diff.shape} ')
+
+        steering_angle_cost = torch.sum(steering_angle_diff ** 2, dim=1)  # shape: (num_particles)
+        # print (f'shape of steering angle cost is {steering_angle_cost.shape} ')
+
+        return steering_angle_cost
+    
+    def action_cost_i_axis (self, action: torch.Tensor) -> torch.Tensor:
+
+        if self.prev_u is not None:
+            action = action.squeeze()  # shape is (num_particles, horizon, 3)
+            acceleration = action [:,:,0] - self.prev_u[None,:,0]
+            print (f'shape of acceleration is {acceleration.shape} ')
+            action_cost = torch.sum (acceleration **2 ,  dim = 1)
+            print (f'shape of action_cost is {action_cost.shape} ')
+            
+                                                                     
         
-        # action cost -- how sporatic the action is 
-        action = action.squeeze()
-        action_cost = torch.sum((action[:, 1:, 0] - action[:, :-1, 0])**2, dim=1) + torch.sum((action[:, 1:, 2] - action[:, :-1, 2])**2, dim=1)
+        else: 
+            action_cost = torch.zeros (self.num_samples).to(self.device)
+        return action_cost
+    
+    def action_cost_t_axis (self, action: torch.Tensor) -> torch.Tensor:
+        action = action.squeeze()  # shape is (num_particles, horizon, 3)
+        action_diff = action[:,1:,:] - action[:,:-1,:]
+        action_cost = torch.sum (action_diff **2 ,  dim = (1,2))
+        return action_cost
+    
+    def costmap_cost (self, state: torch.Tensor) -> torch.Tensor:
+        state_squeezed = state.squeeze()  #  (num_particles, horizon, 3)
+        pos_in_costmap_frame = (state_squeezed[:,:,:2] - torch.tensor ([self.local_costmap.origin_x, self.local_costmap.origin_y], device=self.device)) 
+        grid_x = torch.clamp((pos_in_costmap_frame[:,:,0] / self.local_costmap.resolution).long(), 0, self.local_costmap.width -1)
+        grid_y = torch.clamp((pos_in_costmap_frame[:,:,1] / self.local_costmap.resolution).long(), 0, self.local_costmap.height -1)
+        costmap_cost = self.local_costmap.data[grid_y.cpu().numpy(), grid_x.cpu().numpy()]  # Shape: (N, T')
 
-        # obstacle cost from nav2 costmap 
-        # pos_in_costmap_frame = (state_squeezed[:,:,:2] - torch.tensor ([self.local_costmap.origin_x, self.local_costmap.origin_y], device=self.device)) 
-        # grid_x = torch.clamp((pos_in_costmap_frame[:,:,0] / self.local_costmap.resolution).long(), 0, self.local_costmap.width -1)
-        # grid_y = torch.clamp((pos_in_costmap_frame[:,:,1] / self.local_costmap.resolution).long(), 0, self.local_costmap.height -1)
-        # costmap_cost = self.local_costmap.data[grid_y.cpu().numpy(), grid_x.cpu().numpy()]  # Shape: (N, T')
-
-        # # costmap_cost = self.local_costmap.data [grid_y.cpu().numpy()*self.local_costmap.width + grid_x.cpu().numpy()]  # Shape: (N, T')
-        # # costmap_cost = self.local_costmap.data[grid_x.cpu().numpy(), grid_y.cpu().numpy()]  # Shape: (N, T')
-
-
-        # costmap_cost_tensor = torch.tensor(costmap_cost, dtype=torch.float32, device=self.device)
+        costmap_cost_tensor = torch.tensor(costmap_cost, dtype=torch.float32, device=self.device)
         
-        # costmap_cost_tensor = torch.where (costmap_cost_tensor > 90, 10e+8, costmap_cost_tensor)
-        # costmap_cost_tensor = costmap_cost_tensor
-        # costmap_cost_sum = torch.sum(costmap_cost_tensor, dim=1)
-        
-        # cv
+        costmap_cost_tensor = torch.where (costmap_cost_tensor > 90, 10e+8, costmap_cost_tensor)
+        costmap_cost_tensor = costmap_cost_tensor
+        costmap_cost_sum = torch.sum(costmap_cost_tensor, dim=1)
+
+        return costmap_cost_sum
+
+    def cv_cost (self, state: torch.Tensor) -> torch.Tensor:
+        state_squeezed = state.squeeze()  #  (num_particles, horizon, 3)
         cv_cost = torch.zeros(self.num_samples).to(self.device)
         curr_state = self.agent_states.copy()
         prev_state = self.previous_agent_states.copy()
-        
-        # print (f'shape of state is {state.shape} ')
-
-        # for agent_id in curr_state.keys():
-        #     print (f'agent id is {agent_id} ')
 
         for agent_id in curr_state.keys():
             if agent_id in prev_state.keys():
@@ -310,47 +354,68 @@ class SMMPPIController:
                 cv_pred, logits = construct_cv_prediction (curr_state[agent_id], torch.tensor ([0.0, 0.0], dtype=torch.float32).to(self.device))
                 cv_cost += compute_cv_cost (state_squeezed, cv_pred)
                 # print (f'id not found in previous state, using current state for cv cost ')
-        # print (f'cv cost shape is {cv_cost.shape} ')
-
-        # steering jitter cost 
-        steering_cost = self.calculate_steering_angle_cost(action)
-
-
-        # heading cost 
+        return cv_cost
+    
+    def heading_cost (self, state: torch.Tensor) -> torch.Tensor:
+        state_squeezed = state.squeeze()  #  (num_particles, horizon, 3)
         heading_to_goal = torch.atan2(self.goal[1] - state_squeezed[:,:,1], self.goal[0] - state_squeezed[:,:,0])  # Shape: (N, T')
         heading_error = heading_to_goal - state_squeezed[:,:,2]  # Shape
         heading_error = (heading_error + np.pi) % (2 * np.pi) - np.pi  # Wrap to [-pi, pi]
         heading_cost = 1 - torch.cos(heading_error)  # Shape: (N, T')
         heading_cost = heading_cost.mean(dim=1)  # Shape: (N,)
 
+        return heading_cost
+
+    def terminal_cost(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+        
+        goal_expanded = self.goal[None, :] # (num_particles, horizon, 3) 
+        state_squeezed = state.squeeze() #  (num_particles, horizon, 3)
+
+         # calculate terminal goal cost
+        terminal_goal_cost = self.terminal_goal_cost(state)
+
+        goal_cost = self.goal_progress_cost (state)
+
+        action_cost = self.action_cost_i_axis(action) 
+
+        action_cost_t = self.action_cost_t_axis(action)
+
+        costmap_cost = self.costmap_cost(state)
+        
+        cv_cost = self.cv_cost(state)
+        
+        steering_cost = self.steering_cost_i_axis(action)
+
+        heading_cost = self.heading_cost(state)
 
 
+        goal_weight =  1000 
+        action_weight = 5000
+        heading_weight = 3000 
+        steering_weight = 100
 
-        # print (f'average cv cost is {torch.mean(cv_cost).item()} ')
-        goal_weight =  1000
-        threshold = 0
-        action_weight = 0 #1000: setting to 0 b/c using SMPPI
-        heading_weight = 0 # 20 # 200
-        dynamic_obstacle_weight = 0
         sm_weight = 10
-        costmap_weight = 0 #1
+        costmap_weight = 1 
         cv_weight = 100
         terminal_goal_weight = 1000
+        action_t_weight = 1000
 
-        # print (f'min terminal goal cost is {terminal_goal_cost.min().item() * terminal_goal_weight} \n \
-        #        min action cost is {torch.min(action_cost).item() * action_weight} \n \
-        #        min heading cost is  {torch.min(heading_cost).item() * heading_weight} \n\
-        #     #    min costmap cost is {torch.min(costmap_cost_sum).item() * costmap_weight} \n 
-        #        min cv cost is {torch.min(cv_cost).item() * cv_weight} \n \
-        #        min goal cost is {torch.min(goal_cost).item() * goal_weight} ')
+        print (f'min terminal goal cost is {terminal_goal_cost.min().item() * terminal_goal_weight} \n \
+               mean action cost is {torch.mean(action_cost).item() * action_weight} \n \
+               mean action_t cost is {torch.mean(action_cost_t).item() * action_t_weight} \n \
+               min heading cost is  {torch.min(heading_cost).item() * heading_weight} \n\
+               mean steering cost is {torch.mean(steering_cost).item() * steering_weight} \n \
+                min costmap cost is {torch.min(costmap_cost).item() * costmap_weight} \n \
+               min cv cost is {torch.min(cv_cost).item() * cv_weight} \n \
+               min goal cost is {torch.min(goal_cost).item() * goal_weight} ')
 
 
         cost = goal_weight*(goal_cost)  + terminal_goal_cost * terminal_goal_weight \
-            + action_weight*action_cost \
-                + heading_weight * heading_cost  \
-                    + dynamic_obstacle_weight*dynamic_obstacle_costs \
-                        + sm_weight * sm_costs + cv_weight * cv_cost\
-                            # + costmap_weight * costmap_cost_sum
+            + action_weight*action_cost   + action_t_weight * action_cost_t \
+                + steering_weight * steering_cost \
+                    + heading_weight * heading_cost  \
+                            + cv_weight * cv_cost\
+                                + costmap_weight * costmap_cost
         
         ###### for visualization ######
         self.candidate_states = state_squeezed

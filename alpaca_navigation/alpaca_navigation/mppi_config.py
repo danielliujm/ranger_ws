@@ -5,8 +5,8 @@ from datetime import datetime
 NOW = datetime.now()
 
 VMAX = 1.4 #0.7
-DT = 0.1 #0.4
-HORIZON_LENGTH =  40 #30 #16
+DT = 0.4 #0.4
+HORIZON_LENGTH =  30 #30 #16
 MAX_AGENT_NUM = 14
 ACTIVE_AGENTS = 1
 AGENT_GOALS = np.array([[0.0,-2.35], [0.0, 2.75]]) #goal of the agents, only required for evaluation metrics
@@ -19,7 +19,7 @@ STATIC_OBSTACLES = [
             [(0.7, -2.0), (2.0, -2.0), (2.0, 2.0), (0.7, 2.0)]  
             ]  # polgon shape of the static obstacles
 
-NUM_SAMPLES = 250 #500
+NUM_SAMPLES = 5000
 NEED_ODOM = False
 NEED_LASER = False
 HUMAN_FRAME = "human" # for the TF transform from the motion capture
@@ -35,5 +35,9 @@ ACKNOWLEDGE_RADIUS = 2.0
 SIGMA_H = 0.3
 SIGMA_S = 0.3
 SIGMA_R = 0.6
+
+MIN_TURN_RADIUS = 0.4764
+
+MS_COST = 1000 # cost to switch from rotate in place to dual ackermann
 
 Q_OBS = 10e3 #Use with terminal cost
