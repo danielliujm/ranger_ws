@@ -11,8 +11,9 @@ import numpy as np
 
 
 class VisualizationUtils:
-    def __init__(self, node: Node) -> None:
+    def __init__(self, node: Node, global_frame) -> None:
         self._node = node
+        self.global_frame = global_frame
 
         self._rollouts_pub = self._node.create_publisher(
             MarkerArray, f"/{self._node.get_name()}/vis/rollouts", 1
@@ -45,7 +46,7 @@ class VisualizationUtils:
         marker_array = MarkerArray()
 
         clear_marker = Marker()
-        clear_marker.header.frame_id = "map"
+        clear_marker.header.frame_id = self.global_frame
         clear_marker.action = Marker.DELETEALL
         marker_array.markers.append(clear_marker)
         
@@ -83,7 +84,7 @@ class VisualizationUtils:
 
         if is_rollout:
             min_marker = Marker()
-            min_marker.header.frame_id = "map"
+            min_marker.header.frame_id = self.global_frame
             min_marker.id = min_cost_id
             min_marker.type = Marker.LINE_STRIP
             min_marker.scale.x = 0.05
@@ -125,7 +126,7 @@ class VisualizationUtils:
             num_sample_to_visualize = 20
             for sample_idx in range(num_sample_to_visualize):
                 marker = Marker()
-                marker.header.frame_id = "map"
+                marker.header.frame_id = self.global_frame
                 marker.id = sample_idx
                 marker.type = Marker.LINE_STRIP
                 marker.scale.x = 0.01
@@ -169,12 +170,12 @@ class VisualizationUtils:
 
     def visualize_path(self, path: list[tuple[float, float, float]]) -> None:
         path_msg = Path()
-        path_msg.header.frame_id = "map"
+        path_msg.header.frame_id = self.global_frame
         path_msg.header.stamp = self._node.get_clock().now().to_msg()
 
         for state in path:
             pose = PoseStamped()
-            pose.header.frame_id = "map"
+            pose.header.frame_id = self.global_frame
             pose.header.stamp = self._node.get_clock().now().to_msg()
 
             pose.pose.position.x = state[0]

@@ -58,7 +58,7 @@ class SMMPPIController:
         cov = torch.eye(3, dtype=torch.float32).to(self.device)
         cov[0, 0] = 1
         cov[1, 1] = 10e-8 #0.001
-        cov[2, 2] = 0.002
+        cov[2, 2] = 0.01
         # MPPI initialization
         # print (f'horizon lenghth is {self.horizon} ')
         U_init = torch.zeros((self.horizon, 3)).to(self.device)
@@ -78,8 +78,8 @@ class SMMPPIController:
             step_dependent_dynamics=True,
 
 
-            u_min=torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32).to(self.device),
-            u_max=torch.tensor([0.6, 0.0, 0.0], dtype=torch.float32).to(self.device),
+            u_min=torch.tensor([0.0, 0.0, -1.0], dtype=torch.float32).to(self.device),
+            u_max=torch.tensor([0.6, 0.0, 1.0], dtype=torch.float32).to(self.device),
             
             # action_max=torch.tensor([0.6, 0.0, 1.0], dtype=torch.float32).to(self.device),
             # action_min=torch.tensor([0.0, 0.0, -1.0], dtype=torch.float32).to(self.device),
@@ -173,7 +173,7 @@ class SMMPPIController:
         print (f'calculated turning radius is {radius} m ')
 
         # x = math.sqrt (radius**2 - (l/2)**2)
-        phi = math.atan2 ( radius, l/2)
+        phi = math.atan2 ( l/2, radius) if is_ackermann else math.pi / 4.0
         return phi, is_ackermann
     
     def calculate_steering_angle (self,action:torch.Tensor):
@@ -190,7 +190,9 @@ class SMMPPIController:
         l = torch.tensor(0.494).to(self.device) # wheelbase ( front to back )
         w = torch.tensor(0.364).to(self.device) # track (left to right)
         x = torch.sqrt (radius**2 - (l/2)**2)
-        phi = torch.atan2 ( radius, l/2)
+        phi = torch.atan2 ( l/2, radius)
+        phi = torch.where (~is_ackermann, torch.tensor(np.pi / 4.0).to(self.device), phi)
+
         return phi, is_ackermann
 
     
@@ -266,7 +268,7 @@ class SMMPPIController:
         if self.prev_u is not None:
             action = action.squeeze()  # shape is (num_particles, horizon, 3)
 
-            print (f'shape of prev steering angle is {self.prev_u[0,:].shape} ')
+            print (f'shape of prev action is {self.prev_u[0,:].shape} ')
             prev_steering_angle, prev_is_ackermann = self.steering_angle_single_action (self.prev_u[0,:])
             
             curr_steering_angle, curr_is_ackermann  = self.calculate_steering_angle (action)
@@ -303,9 +305,9 @@ class SMMPPIController:
 
         if self.prev_u is not None:
             action = action.squeeze()  # shape is (num_particles, horizon, 3)
-            acceleration = action [:,:,0] - self.prev_u[None,:,0]
+            acceleration = action [:,0,0] - self.prev_u[None,0,0]
             print (f'shape of acceleration is {acceleration.shape} ')
-            action_cost = torch.sum (acceleration **2 ,  dim = 1)
+            action_cost = torch.abs(acceleration)
             print (f'shape of action_cost is {action_cost.shape} ')
             
                                                                      
@@ -380,7 +382,9 @@ class SMMPPIController:
 
         action_cost_t = self.action_cost_t_axis(action)
 
-        costmap_cost = self.costmap_cost(state)
+        costmap_cost = torch.zeros (self.num_samples).to(self.device)
+        # costmap_cost = self.costmap_cost(state)
+
         
         cv_cost = self.cv_cost(state)
         
@@ -390,9 +394,9 @@ class SMMPPIController:
 
 
         goal_weight =  1000 
-        action_weight = 5000
-        heading_weight = 3000 
-        steering_weight = 100
+        action_weight = 10000
+        heading_weight = 0 
+        steering_weight = 0
 
         sm_weight = 10
         costmap_weight = 1 
@@ -407,7 +411,7 @@ class SMMPPIController:
                mean steering cost is {torch.mean(steering_cost).item() * steering_weight} \n \
                 min costmap cost is {torch.min(costmap_cost).item() * costmap_weight} \n \
                min cv cost is {torch.min(cv_cost).item() * cv_weight} \n \
-               min goal cost is {torch.min(goal_cost).item() * goal_weight} ')
+               min goal cost is {torch.mean(goal_cost).item() * goal_weight} ')
 
 
         cost = goal_weight*(goal_cost)  + terminal_goal_cost * terminal_goal_weight \

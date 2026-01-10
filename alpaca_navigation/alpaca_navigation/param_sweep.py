@@ -2,24 +2,36 @@ import csv
 import itertools
 import torch
 from nav_msgs.msg import OccupancyGrid
-from alpaca_navigation.mppi_config import (
-	STATIC_OBSTACLES,
-	HORIZON_LENGTH,
-	DT,
-	NUM_SAMPLES,
-)
-from sm_mppi_for_param_sweep import SMMPPIController
+from mppi_config import * 
+from simulator import *
 
 
-HORIZON_OPTIONS = [10,15,20,25,30,35,40]
-DT_OPTIONS = [0.1,0.2,0.3,0.4,0.5]
-NUM_SAMPLE_OPTIONS = [250,400,500]
-COV_X_OPTIONS = [1e-2,1e-1,1.0,2,3,4,5,6,7,8,9,10]
-COV_Z_OPTIONS = [1e-2,1e-1,1.0,2,3,4,5,6,7,8,9,10]
-W_ACTION_SEQ_COST_OPTIONS = [1e-3,1e-2,1e-1,1.0,1e+2,1e+3]
-LAMBDA_OPTIONS = [1e-3,1e-2,1e-1,1.0,10,100,1000]
-GOAL_WEIGHT_OPTIONS = [1e-3,1e-2,1e-1,1.0,10,100,1000]
-TERMINAL_GOAL_WEIGHT_OPTIONS = [1e-3,1e-2,1e-1,1.0,10,100,1000]
+torch.manual_seed (42)
+
+
+
+DT_OPTIONS = [0.4]
+
+COV_X_OPTIONS = [1e-2,1e-1,1.0]
+COV_Z_OPTIONS = [1e-2,1e-1,1.0]
+LAMBDA_OPTIONS = [1e-2,1e-1,1.0,10,100]
+GOAL_WEIGHT_OPTIONS = [100,1000,10000,100000]
+ACTION_I_AXIS_WEIGHT_OPTIONS = [0,100,1000,10000, 500000]
+ACTION_T_AXIS_WEIGHT_OPTIONS = [0,100,1000,10000, 500000]
+STEERING_WEIGHT_OPTIONS = [0, 100,1000,10000]
+HEADING_WEIGHT_OPTIONS = [0, 100,1000,10000]
+
+
+# DT_OPTIONS = [0.4]
+
+# COV_X_OPTIONS = [1e-2]
+# COV_Z_OPTIONS = [1e-2]
+# LAMBDA_OPTIONS = [1e-2,1e-1]
+# GOAL_WEIGHT_OPTIONS = [100]
+# ACTION_I_AXIS_WEIGHT_OPTIONS = [0]
+# ACTION_T_AXIS_WEIGHT_OPTIONS = [0]
+# STEERING_WEIGHT_OPTIONS = [0]
+# HEADING_WEIGHT_OPTIONS = [0]
 
 # HORIZON_OPTIONS = [HORIZON_LENGTH]
 # DT_OPTIONS = [DT]
@@ -83,48 +95,55 @@ def run_trial(params: dict) -> float:
 
 def sweep_and_save(output_path: str = "param_sweep_results.csv") -> None:
 	header = [
-		"horizon_length",
 		"dt",
-		"num_samples",
 		"cov_x",
 		"cov_z",
-		"w_action_seq_cost",
 		"lambda",
-		"final_cost",
+		"goal_weight",
+		"action_i_axis_weight",
+		"action_t_axis_weight",
+		"steering_weight",
+		"heading_weight",
+		"final_dist",
+		"termination",
+		"time_total",
 	]
 
 	rows = []
-	total = len(HORIZON_OPTIONS) * len(DT_OPTIONS) * len(NUM_SAMPLE_OPTIONS) * len(COV_X_OPTIONS) * len(COV_Z_OPTIONS) * len(W_ACTION_SEQ_COST_OPTIONS) * len(LAMBDA_OPTIONS)
 	done = 0
+	total = len(DT_OPTIONS) * len(COV_X_OPTIONS) * len(COV_Z_OPTIONS) * len(LAMBDA_OPTIONS) * len(GOAL_WEIGHT_OPTIONS) * len(ACTION_I_AXIS_WEIGHT_OPTIONS) * len(ACTION_T_AXIS_WEIGHT_OPTIONS) * len(STEERING_WEIGHT_OPTIONS) * len(HEADING_WEIGHT_OPTIONS)
 	for combo in itertools.product(
-		HORIZON_OPTIONS,
 		DT_OPTIONS,
-		NUM_SAMPLE_OPTIONS,
 		COV_X_OPTIONS,
 		COV_Z_OPTIONS,
-		W_ACTION_SEQ_COST_OPTIONS,
 		LAMBDA_OPTIONS,
-		# GOAL_WEIGHT_OPTIONS,
-		# TERMINAL_GOAL_WEIGHT_OPTIONS,
+		GOAL_WEIGHT_OPTIONS,
+		ACTION_I_AXIS_WEIGHT_OPTIONS,
+		ACTION_T_AXIS_WEIGHT_OPTIONS,
+		STEERING_WEIGHT_OPTIONS,
+		HEADING_WEIGHT_OPTIONS,
 	):
 		params = {
-			"horizon_length": combo[0],
-			"dt": combo[1],
-			"num_samples": combo[2],
-			"cov_x": combo[3],
-			"cov_z": combo[4],
-			"w_action_seq_cost": combo[5],
-			"lambda": combo[6],
-			# "goal_weight": combo[7],
-			# "terminal_goal_weight": combo[8],
+			"dt": combo[0],
+			"cov_x": combo[1],
+			"cov_z": combo[2],
+			"lambda": combo[3],
+			"goal_weight": combo[4],
+			"action_i_axis_weight": combo[5],
+			"action_t_axis_weight": combo[6],
+			"steering_weight": combo[7],
+			"heading_weight": combo[8],
 		}
 
-		final_cost = run_trial(params)
-		row = {**params, "final_cost": final_cost}
+		final_dist, termination, time_total = run_simulator(params)
+		row = {**params, "final_dist": final_dist, "termination": termination, "time_total": time_total}
 		rows.append(row)
 
 		done += 1
 		print(f"[param sweep] {done}/{total} completed ({done/total:.2%})")
+		if termination:
+			print ("Stopping sweep due to successful termination.")
+			break
 
 	with open(output_path, "w", newline="") as csvfile:
 		writer = csv.DictWriter(csvfile, fieldnames=header)

@@ -33,6 +33,7 @@ from tf2_geometry_msgs import do_transform_pose, do_transform_point
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from alpaca_navigation.viz_utils import *
+from pathlib import Path
 
 import os
 import termios
@@ -43,6 +44,10 @@ import select
 
 EPSILON = 1e-12
 
+
+### REMOVE LATER ###
+torch.manual_seed (42)
+####################
 
 class NonBlockingStdin:
     """Lightweight non-blocking stdin reader for the deadman switch."""
@@ -168,7 +173,7 @@ class MPPLocalPlannerMPPI(Node):
         self.rollouts_pub = self.create_publisher(MarkerArray, '/mppi_rollouts', 10)
 
         # visualization utils
-        self.viz_tool = VisualizationUtils(self)
+        self.viz_tool = VisualizationUtils(self, global_frame = 'map' if self.pose_source == 'amcl' else 'odom')
         
         # safety no movement if safety is on 
         self.safety = (safety == 'on')
@@ -482,8 +487,11 @@ class MPPLocalPlannerMPPI(Node):
             self.current_state, self.previous_robot_state, self.robot_velocity, self.agents, self.agents_last_seen, self.agent_velocities
         )
 
-        log_path = "debug_action_history_x_2.npy"
-        new_row = action[:,0].detach().cpu().numpy()
+        log_path = "debug_action_history_x.npy"
+       
+        cost = torch.mean (self.costs).item() if self.costs is not None else 0
+
+        new_row = np.append (action[:,0].detach().cpu().numpy(), cost)
         history = []
         if os.path.exists(log_path):
             try:
@@ -495,7 +503,23 @@ class MPPLocalPlannerMPPI(Node):
         history = np.atleast_2d(history)
         history = np.vstack([history, new_row]) if history.size else new_row[None, :]
         np.save(log_path, history)
-        np.savetxt ("debug_action_history_x_2.txt", history)
+        np.savetxt (str(Path(log_path).with_suffix(".txt")), history)
+
+        log_path = "debug_action_history_z.npy"
+
+        new_row = np.append (action[:,2].detach().cpu().numpy(), cost)
+        history = []
+        if os.path.exists(log_path):
+            try:
+                
+                history = np.load(log_path)
+                print ('loaded history shape: ', history.shape)
+            except Exception:
+                history = []
+        history = np.atleast_2d(history)
+        history = np.vstack([history, new_row]) if history.size else new_row[None, :]
+        np.save(log_path, history)
+        np.savetxt (str(Path(log_path).with_suffix(".txt")), history)
 
         if action.dim() != 1:
             action = action[0]
