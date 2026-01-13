@@ -487,39 +487,39 @@ class MPPLocalPlannerMPPI(Node):
             self.current_state, self.previous_robot_state, self.robot_velocity, self.agents, self.agents_last_seen, self.agent_velocities
         )
 
-        log_path = "debug_action_history_x.npy"
+        # log_path = "debug_action_history_x.npy"
        
-        cost = torch.mean (self.costs).item() if self.costs is not None else 0
+        # cost = torch.mean (self.costs).item() if self.costs is not None else 0
 
-        new_row = np.append (action[:,0].detach().cpu().numpy(), cost)
-        history = []
-        if os.path.exists(log_path):
-            try:
+        # new_row = np.append (action[:,0].detach().cpu().numpy(), cost)
+        # history = []
+        # if os.path.exists(log_path):
+        #     try:
                 
-                history = np.load(log_path)
-                print ('loaded history shape: ', history.shape)
-            except Exception:
-                history = []
-        history = np.atleast_2d(history)
-        history = np.vstack([history, new_row]) if history.size else new_row[None, :]
-        np.save(log_path, history)
-        np.savetxt (str(Path(log_path).with_suffix(".txt")), history)
+        #         history = np.load(log_path)
+        #         print ('loaded history shape: ', history.shape)
+        #     except Exception:
+        #         history = []
+        # history = np.atleast_2d(history)
+        # history = np.vstack([history, new_row]) if history.size else new_row[None, :]
+        # np.save(log_path, history)
+        # np.savetxt (str(Path(log_path).with_suffix(".txt")), history)
 
-        log_path = "debug_action_history_z.npy"
+        # log_path = "debug_action_history_z.npy"
 
-        new_row = np.append (action[:,2].detach().cpu().numpy(), cost)
-        history = []
-        if os.path.exists(log_path):
-            try:
+        # new_row = np.append (action[:,2].detach().cpu().numpy(), cost)
+        # history = []
+        # if os.path.exists(log_path):
+        #     try:
                 
-                history = np.load(log_path)
-                print ('loaded history shape: ', history.shape)
-            except Exception:
-                history = []
-        history = np.atleast_2d(history)
-        history = np.vstack([history, new_row]) if history.size else new_row[None, :]
-        np.save(log_path, history)
-        np.savetxt (str(Path(log_path).with_suffix(".txt")), history)
+        #         history = np.load(log_path)
+        #         print ('loaded history shape: ', history.shape)
+        #     except Exception:
+        #         history = []
+        # history = np.atleast_2d(history)
+        # history = np.vstack([history, new_row]) if history.size else new_row[None, :]
+        # np.save(log_path, history)
+        # np.savetxt (str(Path(log_path).with_suffix(".txt")), history)
 
         if action.dim() != 1:
             action = action[0]
@@ -553,6 +553,7 @@ class MPPLocalPlannerMPPI(Node):
             x_effort= action[0].item() if abs(action[0].item()) < VMAX else np.sign(action[0].item())*VMAX 
             y_effort = action[1].item() if abs(action[1].item()) < VMAX else np.sign(action[1].item())*VMAX 
 
+            # filter out deadband
             # if abs(x_effort) < 0.01:
             #     x_effort = 0.0
             if abs (y_effort) < 0.01:

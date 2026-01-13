@@ -78,13 +78,13 @@ class SMMPPIController:
             step_dependent_dynamics=True,
 
 
-            u_min=torch.tensor([0.0, 0.0, -1.0], dtype=torch.float32).to(self.device),
-            u_max=torch.tensor([0.6, 0.0, 1.0], dtype=torch.float32).to(self.device),
+            u_min=torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32).to(self.device),
+            u_max=torch.tensor([0.6, 0.0, 0.0], dtype=torch.float32).to(self.device),
             
             # action_max=torch.tensor([0.6, 0.0, 1.0], dtype=torch.float32).to(self.device),
             # action_min=torch.tensor([0.0, 0.0, -1.0], dtype=torch.float32).to(self.device),
 
-            lambda_ = 1, #1e-2,
+            lambda_ = 100, #1e-2,
             # delta_t = 0.1,
             kernel = mppi.RBFKernel (sigma = 3.0),
             num_support_pts=self.horizon //4, 
@@ -250,7 +250,8 @@ class SMMPPIController:
         denominator = torch.norm (goal_expanded - state_squeezed [:,:-1,:2], dim = 2) + 1e-6
 
         print (f'numerator shape is {numerator.shape} , denominator shape is {denominator.shape} ')
-        cost = numerator / denominator 
+        
+        cost = (numerator / denominator) * torch.exp(-torch.arange(numerator.shape[1], dtype=torch.float32, device=numerator.device) * 0.1)
         
         cost = cost.mean (dim = 1)
 
@@ -305,9 +306,9 @@ class SMMPPIController:
 
         if self.prev_u is not None:
             action = action.squeeze()  # shape is (num_particles, horizon, 3)
-            acceleration = action [:,0,0] - self.prev_u[None,0,0]
+            acceleration = action [:,:,0] - self.prev_u[None,:,0]
             print (f'shape of acceleration is {acceleration.shape} ')
-            action_cost = torch.abs(acceleration)
+            action_cost = torch.sum (torch.abs(acceleration), dim = 1)
             print (f'shape of action_cost is {action_cost.shape} ')
             
                                                                      
@@ -393,18 +394,18 @@ class SMMPPIController:
         heading_cost = self.heading_cost(state)
 
 
-        goal_weight =  1000 
-        action_weight = 10000
+        goal_weight =  5000
+        action_weight = 100
         heading_weight = 0 
         steering_weight = 0
 
         sm_weight = 10
         costmap_weight = 1 
         cv_weight = 100
-        terminal_goal_weight = 1000
+        terminal_goal_weight = 100
         action_t_weight = 1000
 
-        print (f'min terminal goal cost is {terminal_goal_cost.min().item() * terminal_goal_weight} \n \
+        print (f'mean terminal goal cost is {terminal_goal_cost.mean().item() * terminal_goal_weight}  \n \
                mean action cost is {torch.mean(action_cost).item() * action_weight} \n \
                mean action_t cost is {torch.mean(action_cost_t).item() * action_t_weight} \n \
                min heading cost is  {torch.min(heading_cost).item() * heading_weight} \n\
